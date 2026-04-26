@@ -10,7 +10,7 @@ Automated Bounded Context creation through a Large Language Model (LLM) using Re
 This system takes a software use case description (in JSON format) and automatically identifies **Bounded Contexts** from it, using an LLM augmented with NLP reference datasets.
 
 ### Pipeline Overview
-
+```
 MySQL (relational DB) 
 ↓ Embedding Module reads datasets 
 ChromaDB (vector DB) 
@@ -22,7 +22,7 @@ RAG-LLM
 Bounded Context Module 
 ↓ Returns structured JSON output 
 User
-
+```
 ---
 
 ## Project Structure
