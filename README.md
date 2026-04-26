@@ -27,6 +27,7 @@ User
 
 ## Project Structure
 
+```
 rag-llm-bounded-context/
 ├── database/               # Database Module (BFR1–BFR4)
 │   ├── schema.sql          # MySQL schema definition
@@ -42,7 +43,7 @@ rag-llm-bounded-context/
 ├── .env.example            # Environment variable template
 ├── .gitignore
 └── README.md
-
+```
 ---
 
 ## Requirements
