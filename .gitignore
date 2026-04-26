@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Environment variables
+.env
+
+# Dataset files
+*.csv
+
+# Vector DB local files
+chroma_db/
