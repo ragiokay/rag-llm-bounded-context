@@ -225,4 +225,4 @@ __marimo__/
 *.csv
 
 # Vector DB local files
-chroma_db/
+vector_db/
