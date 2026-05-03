@@ -5,119 +5,92 @@
 
 import chromadb
 from sentence_transformers import SentenceTransformer
-from fetch_from_db import fetch_all, fetch_distinct_domains, fetch_by_domain
+from fetch_from_db import fetch_all, fetch_distinct_domains
+from causal_transform import transform_batch, CausalRelationRecord
 
-# Initialize embedding model
 MODEL_NAME = "all-MiniLM-L6-v2"
 model = SentenceTransformer(MODEL_NAME)
 
-# Initialize ChromaDB (local persistent storage)
 chroma_client = chromadb.PersistentClient(path="../vector_db")
 
-def clean_record(row):
-    """
-    BFR5: Organize and clean a single record.
-    Returns None if record is invalid.
-    """
-    phrase = str(row.get("phrase", "")).strip()
-    question = str(row.get("question", "")).strip()
 
-    if not phrase or not question:
-        return None
-
-    # Combine phrase + question as the text to embed
-    text = f"{phrase} {question}"
-    return text
-
-def embed_to_collection(collection_name, rows):
+def embed_records(collection_name: str, records: list[CausalRelationRecord]) -> int:
     """
-    BFR6: Convert cleaned records into vector space.
-    Stores into a ChromaDB collection.
+    BFR6: Embeds CausalRelationRecord objects into a ChromaDB collection.
+    Metadata stored is the full DDD schema so the Prompt Generator can use
+    fields directly without re-parsing.
+    Returns the number of vectors written.
     """
+    if not records:
+        print(f"[embed] No valid records for '{collection_name}', skipping")
+        return 0
+
     collection = chroma_client.get_or_create_collection(name=collection_name)
 
-    texts = []
-    ids = []
-    metadatas = []
-
-    for row in rows:
-        text = clean_record(row)
-        if text is None:
-            print(f"[embed] Skipping invalid record id={row['id']}")
-            continue
-
-        texts.append(text)
-        ids.append(str(row["id"]))
-        metadatas.append({
-            "answer": str(row["answer"]),
-            "category": str(row["category"]),
-            "domain": str(row["domain"])
-        })
-
-    if not texts:
-        print(f"[embed] No valid records to embed for collection '{collection_name}'")
-        return
-
-    print(f"[embed] Embedding {len(texts)} records into '{collection_name}'...")
+    print(f"[embed] Embedding {len(records)} records into '{collection_name}'...")
+    texts = [r.embed_text for r in records]
     embeddings = model.encode(texts, show_progress_bar=True).tolist()
 
     collection.add(
-        ids=ids,
+        ids=[r.id for r in records],
         documents=texts,
         embeddings=embeddings,
-        metadatas=metadatas
+        metadatas=[r.to_chroma_metadata() for r in records],
     )
-    print(f"[embed] Stored {len(texts)} vectors into '{collection_name}'")
+    print(f"[embed] Stored {len(records)} vectors into '{collection_name}'")
+    return len(records)
 
-def review_collection(collection_name):
+
+def review_collection(collection_name: str) -> bool:
     """
-    BFR7: Review and clean vector space.
-    Checks completeness and consistency.
+    BFR7: Sanity-checks a ChromaDB collection after writing.
+    Returns True if the collection passes all checks.
     """
     collection = chroma_client.get_or_create_collection(name=collection_name)
     count = collection.count()
-    print(f"[review] Collection '{collection_name}': {count} vectors")
+    print(f"[review] '{collection_name}': {count} vectors")
 
-    # Check for empty collection
     if count == 0:
-        print(f"[review] WARNING: Collection '{collection_name}' is empty!")
+        print(f"[review] WARNING: '{collection_name}' is empty")
         return False
 
-    # Sample check: peek at first 3 entries
     sample = collection.peek(limit=3)
     for i, doc in enumerate(sample["documents"]):
-        embedding = sample["embeddings"][i]
-        if embedding is None or len(embedding) == 0:
-            print(f"[review] ERROR: Found empty embedding at index {i}")
+        emb = sample["embeddings"][i]
+        if not emb:
+            print(f"[review] ERROR: empty embedding at index {i}")
             return False
-        if any(v != v for v in list(embedding)):  # NaN check
-            print(f"[review] ERROR: Found NaN in embedding at index {i}")
+        if any(v != v for v in emb):  # NaN check
+            print(f"[review] ERROR: NaN in embedding at index {i}")
             return False
 
-    print(f"[review] Collection '{collection_name}' passed review ✓")
+    print(f"[review] '{collection_name}' passed ✓")
     return True
 
+
 def run():
-    """
-    Full pipeline:
-    MySQL -> clean -> embed -> ChromaDB -> review
-    """
+    """Full pipeline: MySQL -> transform -> embed -> ChromaDB -> review."""
     print("=== Embedding Module Start ===")
 
-    # Fetch all data from MySQL
     all_rows = fetch_all()
-
-    # Get distinct domains -> one collection per domain
     domains = fetch_distinct_domains()
-    print(f"[run] Domains found: {domains}")
+    print(f"[run] Domains: {domains}")
+
+    total_written = 0
+    total_skipped = 0
 
     for domain in domains:
         domain_rows = [r for r in all_rows if r["domain"] == domain]
+        records, skipped = transform_batch(domain_rows)
+        total_skipped += skipped
+
         collection_name = f"bpc_{domain.replace(' ', '_').lower()}"
-        embed_to_collection(collection_name, domain_rows)
+        written = embed_records(collection_name, records)
+        total_written += written
         review_collection(collection_name)
 
-    print("=== Embedding Module Complete ===")
+    print(f"=== Embedding Module Complete: {total_written} written, {total_skipped} skipped ===")
+
 
 if __name__ == "__main__":
     run()
