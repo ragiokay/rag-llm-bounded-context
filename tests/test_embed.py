@@ -2,8 +2,8 @@
 Test Plan — Embedding & DB Module
 Module under test: embedding/embed.py (embed_records, review_collection)
 
-SentenceTransformer is mocked throughout so these tests run without network
-access or a downloaded model. ChromaDB is run in-memory (EphemeralClient).
+SentenceTransformer is mocked. ChromaDB runs in-memory (EphemeralClient).
+DDD fields: domain_event, command, policy, aggregate, bounded_context
 """
 
 import sys
@@ -13,11 +13,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "embedding"))
 import numpy as np
 import pytest
 import chromadb
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from causal_transform import CausalRelationRecord, transform_row, transform_batch
 
 EMBED_DIM = 384
-MODEL_NAME = "all-MiniLM-L6-v2"
 
 VALID_ROW = {
     "id": 1,
@@ -28,19 +27,17 @@ VALID_ROW = {
     "domain": "Logistics",
 }
 
+REQUIRED_METADATA_KEYS = {
+    "domain_event", "command", "policy",
+    "aggregate", "bounded_context", "source_phrase"
+}
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def make_mock_model(seed: int = 42):
-    """Returns a mock SentenceTransformer whose .encode() is deterministic."""
     rng = np.random.default_rng(seed)
 
     def fake_encode(texts, show_progress_bar=False, **kwargs):
-        # Same seed → same vectors for same input length is enough for unit tests.
-        result = rng.random((len(texts), EMBED_DIM)).astype(np.float32)
-        return result
+        return rng.random((len(texts), EMBED_DIM)).astype(np.float32)
 
     mock = MagicMock()
     mock.encode.side_effect = fake_encode
@@ -56,7 +53,6 @@ def make_record(row=None) -> CausalRelationRecord:
 
 
 def embed_records_inline(client, model, collection_name, records):
-    """Inline version of embed_records using an injected client and model."""
     if not records:
         return 0
     collection = client.get_or_create_collection(name=collection_name)
@@ -80,38 +76,31 @@ class TestEmbeddingQuality:
         self.model = make_mock_model()
 
     def test_output_shape(self):
-        embs = self.model.encode(["test sentence"])
-        assert embs.shape == (1, EMBED_DIM)
+        assert self.model.encode(["test"]).shape == (1, EMBED_DIM)
 
     def test_batch_shape(self):
-        embs = self.model.encode(["a", "b", "c"])
-        assert embs.shape == (3, EMBED_DIM)
+        assert self.model.encode(["a", "b", "c"]).shape == (3, EMBED_DIM)
 
     def test_no_nan(self):
-        embs = self.model.encode(["test"])[0].tolist()
-        assert not any(v != v for v in embs)
+        assert not any(v != v for v in self.model.encode(["test"])[0].tolist())
 
     def test_nonzero(self):
-        embs = self.model.encode(["test"])[0].tolist()
-        assert any(v != 0 for v in embs)
+        assert any(v != 0 for v in self.model.encode(["test"])[0].tolist())
 
     def test_empty_string_does_not_crash(self):
-        embs = self.model.encode([""])
-        assert embs.shape[1] == EMBED_DIM
+        assert self.model.encode([""]).shape[1] == EMBED_DIM
 
     def test_long_string_does_not_crash(self):
-        embs = self.model.encode(["word " * 1000])
-        assert embs.shape[1] == EMBED_DIM
+        assert self.model.encode(["word " * 1000]).shape[1] == EMBED_DIM
 
     def test_encode_called_with_list(self):
-        texts = ["sentence one", "sentence two"]
-        self.model.encode(texts)
+        self.model.encode(["a", "b"])
         args, _ = self.model.encode.call_args
         assert isinstance(args[0], list)
 
 
 # ---------------------------------------------------------------------------
-# Integration: embed_records -> ChromaDB round-trip (mocked model)
+# Integration: embed_records -> ChromaDB round-trip
 # ---------------------------------------------------------------------------
 
 class TestEmbedRecordsIntegration:
@@ -120,57 +109,57 @@ class TestEmbedRecordsIntegration:
         self.model = make_mock_model()
 
     def test_written_count_matches(self):
-        record = make_record()
-        written = embed_records_inline(self.client, self.model, "col1", [record])
-        assert written == 1
+        assert embed_records_inline(self.client, self.model, "col1", [make_record()]) == 1
 
-    def test_retrieve_by_id_returns_record(self):
+    def test_retrieve_by_id(self):
         record = make_record()
         embed_records_inline(self.client, self.model, "col2", [record])
-        col = self.client.get_collection("col2")
-        result = col.get(ids=[record.id], include=["metadatas", "documents"])
+        result = self.client.get_collection("col2").get(ids=[record.id])
         assert result["ids"] == [record.id]
 
     def test_metadata_keys_complete(self):
         record = make_record()
         embed_records_inline(self.client, self.model, "col3", [record])
-        col = self.client.get_collection("col3")
-        result = col.get(ids=[record.id], include=["metadatas"])
-        meta = result["metadatas"][0]
-        for key in ("cause", "consequence", "bounded_context", "category", "source_phrase"):
-            assert key in meta, f"Missing key: {key}"
+        meta = self.client.get_collection("col3").get(
+            ids=[record.id], include=["metadatas"]
+        )["metadatas"][0]
+        assert REQUIRED_METADATA_KEYS.issubset(meta.keys())
 
-    def test_metadata_bounded_context_value(self):
+    def test_metadata_ddd_values(self):
         record = make_record()
-        embed_records_inline(self.client, self.model, "col3b", [record])
-        col = self.client.get_collection("col3b")
-        result = col.get(ids=[record.id], include=["metadatas"])
-        assert result["metadatas"][0]["bounded_context"] == "Logistics"
+        embed_records_inline(self.client, self.model, "col4", [record])
+        meta = self.client.get_collection("col4").get(
+            ids=[record.id], include=["metadatas"]
+        )["metadatas"][0]
+        assert meta["bounded_context"] == "Logistics"
+        assert meta["domain_event"] == VALID_ROW["phrase"]
+        assert meta["command"] == VALID_ROW["question"]
+        assert meta["policy"].startswith("does —")
 
-    def test_empty_records_list_writes_zero(self):
-        written = embed_records_inline(self.client, self.model, "col4", [])
-        assert written == 0
+    def test_empty_records_writes_zero(self):
+        assert embed_records_inline(self.client, self.model, "col5", []) == 0
 
-    def test_collection_count_after_batch(self):
+    def test_batch_count(self):
         rows = [{**VALID_ROW, "id": i} for i in range(1, 11)]
         records = [transform_row(r) for r in rows]
-        embed_records_inline(self.client, self.model, "col5", records)
-        col = self.client.get_collection("col5")
-        assert col.count() == 10
+        embed_records_inline(self.client, self.model, "col6", records)
+        assert self.client.get_collection("col6").count() == 10
 
-    def test_document_stored_matches_embed_text(self):
-        record = make_record()
-        embed_records_inline(self.client, self.model, "col6", [record])
-        col = self.client.get_collection("col6")
-        result = col.get(ids=[record.id], include=["documents"])
-        assert result["documents"][0] == record.embed_text
-
-    def test_vector_dimension_stored_in_chroma(self):
+    def test_document_matches_embed_text(self):
         record = make_record()
         embed_records_inline(self.client, self.model, "col7", [record])
-        col = self.client.get_collection("col7")
-        result = col.get(ids=[record.id], include=["embeddings"])
-        assert len(result["embeddings"][0]) == EMBED_DIM
+        docs = self.client.get_collection("col7").get(
+            ids=[record.id], include=["documents"]
+        )["documents"]
+        assert docs[0] == record.embed_text
+
+    def test_vector_dimension(self):
+        record = make_record()
+        embed_records_inline(self.client, self.model, "col8", [record])
+        embs = self.client.get_collection("col8").get(
+            ids=[record.id], include=["embeddings"]
+        )["embeddings"]
+        assert len(embs[0]) == EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
@@ -182,63 +171,41 @@ class TestReviewCollection:
         self.client = make_client()
         self.model = make_mock_model()
 
-    def test_empty_collection_count_is_zero(self):
-        col = self.client.get_or_create_collection(name="empty_col")
-        assert col.count() == 0
+    def test_empty_collection_count_zero(self):
+        assert self.client.get_or_create_collection("empty").count() == 0
 
-    def test_non_empty_collection_count_correct(self):
-        record = make_record()
-        embed_records_inline(self.client, self.model, "rev_col", [record])
-        col = self.client.get_collection("rev_col")
-        assert col.count() == 1
+    def test_non_empty_collection_count(self):
+        embed_records_inline(self.client, self.model, "rev1", [make_record()])
+        assert self.client.get_collection("rev1").count() == 1
 
-    def test_peek_embedding_no_nan(self):
-        record = make_record()
-        embed_records_inline(self.client, self.model, "nan_col", [record])
-        col = self.client.get_collection("nan_col")
-        sample = col.peek(limit=1)
-        emb = sample["embeddings"][0]
+    def test_peek_no_nan(self):
+        embed_records_inline(self.client, self.model, "rev2", [make_record()])
+        emb = self.client.get_collection("rev2").peek(limit=1)["embeddings"][0]
         assert not any(v != v for v in emb)
 
-    def test_peek_embedding_correct_dimension(self):
-        record = make_record()
-        embed_records_inline(self.client, self.model, "dim_col", [record])
-        col = self.client.get_collection("dim_col")
-        sample = col.peek(limit=1)
-        assert len(sample["embeddings"][0]) == EMBED_DIM
+    def test_peek_correct_dimension(self):
+        embed_records_inline(self.client, self.model, "rev3", [make_record()])
+        emb = self.client.get_collection("rev3").peek(limit=1)["embeddings"][0]
+        assert len(emb) == EMBED_DIM
 
 
 # ---------------------------------------------------------------------------
-# Integration: transform -> embed pipeline
+# Integration: full transform -> embed pipeline
 # ---------------------------------------------------------------------------
 
 class TestTransformToEmbedPipeline:
-    def test_pipeline_end_to_end(self):
-        """Records transformed from raw rows must survive the full pipeline."""
-        client = make_client()
-        model = make_mock_model()
-
-        rows = [{**VALID_ROW, "id": i, "domain": "Finance"} for i in range(1, 6)]
+    def test_end_to_end(self):
+        client, model = make_client(), make_mock_model()
+        rows = [{**VALID_ROW, "id": i} for i in range(1, 6)]
         records, skipped = transform_batch(rows)
         assert skipped == 0
+        assert embed_records_inline(client, model, "pipe1", records) == 5
+        assert client.get_collection("pipe1").count() == 5
 
-        written = embed_records_inline(client, model, "pipe_col", records)
-        assert written == 5
-
-        col = client.get_collection("pipe_col")
-        assert col.count() == 5
-
-    def test_invalid_rows_not_written(self):
-        client = make_client()
-        model = make_mock_model()
-
-        rows = [
-            VALID_ROW,
-            {**VALID_ROW, "id": 2, "phrase": ""},  # invalid
-            {**VALID_ROW, "id": 3},
-        ]
+    def test_invalid_rows_filtered(self):
+        client, model = make_client(), make_mock_model()
+        rows = [VALID_ROW, {**VALID_ROW, "id": 2, "phrase": ""}, {**VALID_ROW, "id": 3}]
         records, skipped = transform_batch(rows)
         assert skipped == 1
-        embed_records_inline(client, model, "filter_col", records)
-        col = client.get_collection("filter_col")
-        assert col.count() == 2
+        embed_records_inline(client, model, "pipe2", records)
+        assert client.get_collection("pipe2").count() == 2
