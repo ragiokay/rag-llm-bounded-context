@@ -47,7 +47,7 @@ def parse_document(doc: dict) -> list[CausalRelationRecord]:
     for event in doc.get("events", []):
         event_type = event.get("type", "unknown")
         # Use the first mention as the representative trigger
-        mentions = event.get("mentions", [])
+        mentions = event.get("mention", event.get("mentions", []))
         if not mentions:
             continue
         mention = mentions[0]

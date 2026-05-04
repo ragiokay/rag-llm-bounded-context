@@ -32,10 +32,10 @@ def make_doc(causal_relations=None, extra_events=None):
             "The flooding caused widespread damage.",
         ],
         "events": [
-            {"id": "E1", "type": "Catastrophe", "mentions": [
+            {"id": "E1", "type": "Catastrophe", "mention": [
                 {"id": "M1", "sent_id": 0, "trigger_word": "thunderstorm", "offset": [0, 1]}
             ]},
-            {"id": "E2", "type": "Change", "mentions": [
+            {"id": "E2", "type": "Change", "mention": [
                 {"id": "M2", "sent_id": 0, "trigger_word": "postponed", "offset": [2, 3]}
             ]},
         ],
