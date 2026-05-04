@@ -57,7 +57,7 @@ def review_collection(collection_name: str) -> bool:
     sample = collection.peek(limit=3)
     for i, doc in enumerate(sample["documents"]):
         emb = sample["embeddings"][i]
-        if not emb:
+        if emb is None or len(emb) == 0:
             print(f"[review] ERROR: empty embedding at index {i}")
             return False
         if any(v != v for v in emb):  # NaN check
