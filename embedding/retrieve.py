@@ -129,22 +129,55 @@ if __name__ == "__main__":
     import json
 
     print("=== Retrieval Demo ===")
-    print(f"Available collections: {list_collections()}\n")
+    cols = list_collections()
+    print(f"Available collections: {cols}\n")
 
-    test_queries = [
-        # MAVEN-ERE style
-        ("maven_ere_causal", "The storm caused severe flooding in the region."),
-        ("maven_ere_causal", "Political instability led to economic collapse."),
-        # BPC style (will work once bpc_* collections are seeded)
-        # ("bpc_logistics",    "Inventory shortages led to production delays."),
-    ]
+    # --- query_similar: MAVEN-ERE ---
+    print("=" * 60)
+    print("TEST 1: query_similar — MAVEN-ERE")
+    print("=" * 60)
+    q = "The storm caused severe flooding in the region."
+    print(f"Query: \"{q}\"\n")
+    for rank, r in enumerate(query_similar(q, collection="maven_ere_causal", n_results=3), 1):
+        print(f"  Rank {rank}  distance={r['distance']}")
+        print(f"    input  : {r['input'][:100]}")
+        print(f"    policy : {r['output']['policy']}")
+        print(f"    context: {r['output']['bounded_context']}")
+    print()
 
-    for collection, query in test_queries:
-        print(f"Query      : \"{query}\"")
-        print(f"Collection : {collection}")
-        results = query_similar(query, collection=collection, n_results=3)
-        for rank, r in enumerate(results, 1):
-            print(f"  Rank {rank}  distance={r['distance']}  collection={r['collection']}")
+    # --- query_similar: BPC ---
+    bpc_cols = [c for c in cols if c.startswith("bpc_")]
+    if bpc_cols:
+        print("=" * 60)
+        print(f"TEST 2: query_similar — BPC ({bpc_cols[0]})")
+        print("=" * 60)
+        q = "Inventory shortages led to production delays."
+        print(f"Query: \"{q}\"\n")
+        for rank, r in enumerate(query_similar(q, collection=bpc_cols[0], n_results=3), 1):
+            print(f"  Rank {rank}  distance={r['distance']}")
             print(f"    input  : {r['input'][:100]}")
-            print(f"    output : {json.dumps(r['output'], ensure_ascii=False, indent=6)[:300]}")
+            print(f"    policy : {r['output']['policy']}")
+            print(f"    context: {r['output']['bounded_context']}")
         print()
+    else:
+        print("TEST 2: BPC collections not found — run embed.py first\n")
+
+    # --- query_all: cross-collection ---
+    print("=" * 60)
+    print("TEST 3: query_all — search all collections")
+    print("=" * 60)
+    q = "The drought caused crop failure and food shortages."
+    print(f"Query: \"{q}\"\n")
+    for rank, r in enumerate(query_all(q, n_results_per_collection=2), 1):
+        print(f"  Rank {rank}  distance={r['distance']}  collection={r['collection']}")
+        print(f"    input  : {r['input'][:100]}")
+        print(f"    policy : {r['output']['policy']}")
+    print()
+
+    # --- full output shape ---
+    print("=" * 60)
+    print("TEST 4: full output shape (JSON)")
+    print("=" * 60)
+    r = query_similar("Political crisis led to government collapse.",
+                      collection="maven_ere_causal", n_results=1)[0]
+    print(json.dumps(r, ensure_ascii=False, indent=2))
