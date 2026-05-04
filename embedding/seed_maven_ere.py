@@ -123,16 +123,29 @@ def run(limit_docs: int | None = None):
     """
     print("=== MAVEN-ERE Seed Start ===")
 
-    print("Loading MAVEN-ERE from HuggingFace...")
-    try:
-        from datasets import load_dataset
-        dataset = load_dataset("Nofing/maven-ere-json", split="train", trust_remote_code=True)
-    except Exception as e:
-        print(f"[ERROR] Could not load dataset: {e}")
-        print("Try: pip install datasets")
-        raise
+    # --- Load dataset ---
+    # Priority 1: local JSONL file (official THU-KEG download)
+    # Priority 2: HuggingFace unofficial mirror (fallback)
+    default_jsonl = os.path.join(os.path.dirname(__file__), "..", "data", "maven_ere", "train.jsonl")
+    jsonl_path = os.environ.get("MAVEN_ERE_PATH", default_jsonl)
 
-    docs = list(dataset)
+    if os.path.exists(jsonl_path):
+        print(f"Loading MAVEN-ERE from local file: {jsonl_path}")
+        import json
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            docs = [json.loads(line) for line in f if line.strip()]
+    else:
+        print(f"[INFO] Local file not found at {jsonl_path}")
+        print("Falling back to HuggingFace (Nofing/maven-ere-json)...")
+        print("Tip: Download official data from https://github.com/THU-KEG/MAVEN-ERE")
+        print("     and place train.jsonl at data/maven_ere/train.jsonl for better reliability.")
+        try:
+            from datasets import load_dataset
+            dataset = load_dataset("Nofing/maven-ere-json", split="train", trust_remote_code=True)
+            docs = list(dataset)
+        except Exception as e:
+            print(f"[ERROR] Could not load dataset: {e}")
+            raise
     if limit_docs:
         docs = docs[:limit_docs]
     print(f"Loaded {len(docs)} documents")

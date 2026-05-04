@@ -223,6 +223,8 @@ __marimo__/
 
 # Dataset files
 *.csv
+data/maven_ere/*.jsonl
+data/maven_ere/*.json
 
 # Vector DB local files
 vector_db/
