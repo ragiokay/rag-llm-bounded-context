@@ -16,11 +16,14 @@ from causal_transform import CausalRelationRecord
 from seed_maven_ere import parse_document, embed_and_store, RELATION_TYPES
 
 # ---------------------------------------------------------------------------
-# Mock MAVEN-ERE document factory
+# Mock MAVEN-ERE document factory (official THU-KEG dict format)
 # ---------------------------------------------------------------------------
 
 def make_doc(causal_relations=None, extra_events=None):
-    """Minimal valid MAVEN-ERE document."""
+    """
+    Minimal valid MAVEN-ERE document matching the official THU-KEG format.
+    causal_relations is a dict: {"CAUSE": [[eid1, eid2], ...], ...}
+    """
     doc = {
         "id": "doc_001",
         "title": "Weather Events",
@@ -36,11 +39,11 @@ def make_doc(causal_relations=None, extra_events=None):
                 {"id": "M2", "sent_id": 0, "trigger_word": "postponed", "offset": [2, 3]}
             ]},
         ],
-        "causal_relations": [
-            {"head_id": "M1", "tail_id": "M2", "relation": "CAUSE"}
-        ] if causal_relations is None else causal_relations,
-        "temporal_relations": [],
-        "subevent_relations": [],
+        "causal_relations": {
+            "CAUSE": [["E1", "E2"]]
+        } if causal_relations is None else causal_relations,
+        "temporal_relations": {},
+        "subevent_relations": {},
     }
     if extra_events:
         doc["events"].extend(extra_events)
@@ -89,9 +92,7 @@ class TestParseDocumentHappyPath:
         assert "doc_001" in record.id
 
     def test_precondition_relation_also_parsed(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "M1", "tail_id": "M2", "relation": "PRECONDITION"}
-        ])
+        doc = make_doc(causal_relations={"PRECONDITION": [["E1", "E2"]]})
         records = parse_document(doc)
         assert len(records) == 1
         assert "PRECONDITION" in records[0].policy
@@ -103,25 +104,19 @@ class TestParseDocumentHappyPath:
 
 class TestParseDocumentBoundary:
     def test_no_causal_relations_returns_empty(self):
-        doc = make_doc(causal_relations=[])
+        doc = make_doc(causal_relations={})
         assert parse_document(doc) == []
 
     def test_temporal_relation_skipped(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "M1", "tail_id": "M2", "relation": "BEFORE"}
-        ])
+        doc = make_doc(causal_relations={"BEFORE": [["E1", "E2"]]})
         assert parse_document(doc) == []
 
     def test_missing_head_id_skipped(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "MISSING", "tail_id": "M2", "relation": "CAUSE"}
-        ])
+        doc = make_doc(causal_relations={"CAUSE": [["MISSING", "E2"]]})
         assert parse_document(doc) == []
 
     def test_missing_tail_id_skipped(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "M1", "tail_id": "MISSING", "relation": "CAUSE"}
-        ])
+        doc = make_doc(causal_relations={"CAUSE": [["E1", "MISSING"]]})
         assert parse_document(doc) == []
 
     def test_tokenized_sentence_joined(self):
@@ -132,21 +127,20 @@ class TestParseDocumentBoundary:
 
     def test_empty_document_returns_empty(self):
         doc = {"id": "x", "title": "x", "sentences": [], "events": [],
-               "causal_relations": [], "temporal_relations": [], "subevent_relations": []}
+               "causal_relations": {}, "temporal_relations": {}, "subevent_relations": {}}
         assert parse_document(doc) == []
 
     def test_multiple_relations_yields_multiple_records(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "M1", "tail_id": "M2", "relation": "CAUSE"},
-            {"head_id": "M2", "tail_id": "M1", "relation": "PRECONDITION"},
-        ])
+        doc = make_doc(causal_relations={
+            "CAUSE": [["E1", "E2"]],
+            "PRECONDITION": [["E2", "E1"]],
+        })
         assert len(parse_document(doc)) == 2
 
     def test_record_ids_are_unique(self):
-        doc = make_doc(causal_relations=[
-            {"head_id": "M1", "tail_id": "M2", "relation": "CAUSE"},
-            {"head_id": "M2", "tail_id": "M1", "relation": "CAUSE"},
-        ])
+        doc = make_doc(causal_relations={
+            "CAUSE": [["E1", "E2"], ["E2", "E1"]],
+        })
         records = parse_document(doc)
         ids = [r.id for r in records]
         assert len(ids) == len(set(ids))

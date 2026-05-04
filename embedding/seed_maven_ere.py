@@ -34,60 +34,65 @@ def parse_document(doc: dict) -> list[CausalRelationRecord]:
     """
     Parse one MAVEN-ERE document into CausalRelationRecord list.
 
-    MAVEN-ERE structure used:
-        doc["sentences"]        — list of sentences
-        doc["events"]           — list of events with mentions (trigger_word, sent_id)
-        doc["causal_relations"] — list of {head_id, tail_id, relation}
+    Official THU-KEG format:
+        doc["sentences"]          — list of sentences
+        doc["events"]             — list of events; each event has "id", "type", "mentions"
+        doc["causal_relations"]   — dict: {"CAUSE": [[eid1, eid2], ...], "PRECONDITION": [...]}
+
+    event map is keyed by EVENT id (not mention id).
+    embed_text = sentence containing the cause event trigger.
     """
-    # Build event mention lookup: mention_id -> {trigger, sentence, event_type}
+    # Build event lookup: event_id -> {trigger, sentence, event_type}
     event_map: dict = {}
     for event in doc.get("events", []):
         event_type = event.get("type", "unknown")
-        for mention in event.get("mentions", []):
-            sent_id = mention.get("sent_id", 0)
-            event_map[mention["id"]] = {
-                "trigger": mention.get("trigger_word", ""),
-                "sentence": _sentence(doc, sent_id),
-                "event_type": event_type,
-            }
+        # Use the first mention as the representative trigger
+        mentions = event.get("mentions", [])
+        if not mentions:
+            continue
+        mention = mentions[0]
+        sent_id = mention.get("sent_id", 0)
+        event_map[event["id"]] = {
+            "trigger": mention.get("trigger_word", ""),
+            "sentence": _sentence(doc, sent_id),
+            "event_type": event_type,
+        }
 
     doc_title = doc.get("title", "unknown")
     doc_id = str(doc.get("id", ""))
     records: list[CausalRelationRecord] = []
 
-    for idx, rel in enumerate(doc.get("causal_relations", [])):
-        if rel.get("relation") not in RELATION_TYPES:
+    # causal_relations is a dict: {relation_type: [[head_id, tail_id], ...]}
+    causal_relations = doc.get("causal_relations", {})
+    if not isinstance(causal_relations, dict):
+        return records
+
+    for relation, pairs in causal_relations.items():
+        if relation not in RELATION_TYPES:
             continue
+        for idx, pair in enumerate(pairs):
+            if len(pair) < 2:
+                continue
+            head = event_map.get(pair[0])
+            tail = event_map.get(pair[1])
+            if not head or not tail:
+                continue
 
-        head = event_map.get(rel.get("head_id", ""))
-        tail = event_map.get(rel.get("tail_id", ""))
-        if not head or not tail:
-            continue
-
-        cause_trigger = head["trigger"]
-        effect_trigger = tail["trigger"]
-        relation = rel.get("relation", "CAUSE")
-
-        # embed_text = the sentence containing the cause (what we search with)
-        embed_text = head["sentence"]
-        # command = the sentence containing the effect (context of consequence)
-        command = tail["sentence"]
-        policy = f"{relation}: {cause_trigger} → {effect_trigger}"
-
-        try:
-            record = CausalRelationRecord(
-                id=f"maven_{doc_id}_{idx}",
-                domain_event=head["sentence"],
-                command=command,
-                policy=policy,
-                aggregate=head["event_type"],
-                bounded_context=doc_title,
-                source_phrase=head["sentence"],
-                embed_text=embed_text,
-            )
-            records.append(record)
-        except Exception:
-            continue
+            policy = f"{relation}: {head['trigger']} → {tail['trigger']}"
+            try:
+                record = CausalRelationRecord(
+                    id=f"maven_{doc_id}_{relation}_{idx}",
+                    domain_event=head["sentence"],
+                    command=tail["sentence"],
+                    policy=policy,
+                    aggregate=head["event_type"],
+                    bounded_context=doc_title,
+                    source_phrase=head["sentence"],
+                    embed_text=head["sentence"],
+                )
+                records.append(record)
+            except Exception:
+                continue
 
     return records
 
