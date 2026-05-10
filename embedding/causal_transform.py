@@ -27,6 +27,7 @@ class CausalRelationRecord(BaseModel):
     views: Optional[str] = None        # data views — not available in BPC
     user_roles: Optional[str] = None   # actor — not available in BPC
     process: Optional[str] = None      # process — not available in BPC
+    trigger_span: Optional[str] = None  # text span that expresses the command/intent
 
     @field_validator("domain_event", "command", "policy", "aggregate", "bounded_context", "embed_text")
     @classmethod
@@ -54,6 +55,8 @@ class CausalRelationRecord(BaseModel):
             meta["user_roles"] = self.user_roles
         if self.process is not None:
             meta["process"] = self.process
+        if self.trigger_span is not None:
+            meta["trigger_span"] = self.trigger_span
         return meta
 
 

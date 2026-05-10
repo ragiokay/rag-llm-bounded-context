@@ -20,7 +20,7 @@ _model = None
 _client = None
 
 OUTPUT_FIELDS = ["policy", "domain_event", "command", "bounded_context",
-                 "aggregate", "source_phrase", "views", "user_roles", "process"]
+                 "aggregate", "source_phrase", "trigger_span", "views", "user_roles", "process"]
 
 
 def _get_model() -> SentenceTransformer:
