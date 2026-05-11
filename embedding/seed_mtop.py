@@ -107,15 +107,40 @@ def extract_trigger_span(text: str) -> str:
     return " ".join(tokens[start:end])
 
 
+def load_mtop_tsv(path: str) -> list[dict]:
+    """
+    Load the official Facebook MTOP raw TSV file.
+
+    Tab-separated columns (no header):
+        0: id  1: intent  2: slots  3: utterance  4: domain  5: locale  6: parse  7: tokenSpans
+
+    Returns list of dicts with keys: intent, text, domain.
+    """
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 4:
+                continue
+            rows.append({
+                "intent": parts[1],
+                "text":   parts[3],
+                "domain": parts[4] if len(parts) > 4 else "mtop",
+            })
+    return rows
+
+
 def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
     """
     Parse one MTOP row into a CausalRelationRecord.
     Returns None for query-type intents and rows missing required fields.
 
-    Supports both mteb/mtop_intent format (label_text) and raw MTOP format (intent).
+    Accepts raw TSV rows (keys: intent, text, domain) and
+    HF mteb/mtop_intent rows (keys: label_text, text).
     """
-    text = str(row.get("text") or row.get("utterance") or "").strip()
-    intent = str(row.get("label_text") or row.get("intent") or "").strip()
+    text   = str(row.get("text") or row.get("utterance") or "").strip()
+    intent = str(row.get("intent") or row.get("label_text") or "").strip()
+    domain = str(row.get("domain") or "MTOP").strip()
 
     if not text or not intent:
         return None
@@ -134,7 +159,7 @@ def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
             command=command_name,
             policy=f"command: {clean_intent}",
             aggregate=aggregate,
-            bounded_context="MTOP",
+            bounded_context=domain,
             source_phrase=text,
             embed_text=text,
             trigger_span=trigger or None,
@@ -166,31 +191,50 @@ def embed_and_store(records: list[CausalRelationRecord],
 
 def run(limit: int | None = None, lang: str = "en"):
     """
-    Full pipeline: HuggingFace download -> filter -> embed -> ChromaDB.
+    Full pipeline: local TSV files -> filter -> embed -> ChromaDB.
+
+    Expects the official Facebook MTOP release laid out as:
+        data/mtop/<lang>/train.txt   (required)
+        data/mtop/<lang>/eval.txt    (optional)
+        data/mtop/<lang>/test.txt    (optional)
+
+    Override the base directory with the MTOP_PATH environment variable.
 
     Args:
         limit: cap on number of rows to process (None = all).
                Use a small number (e.g. 200) for a quick test run.
-        lang:  MTOP language config (default "en").
+        lang:  language subfolder (default "en").
     """
     print("=== MTOP Seed Start ===")
 
-    try:
-        from datasets import load_dataset
-        print(f"Loading MTOP (mteb/mtop_intent, config={lang}) from HuggingFace...")
-        dataset = load_dataset("mteb/mtop_intent", lang, trust_remote_code=True)
-        rows = list(dataset["train"])
-        if "validation" in dataset:
-            rows += list(dataset["validation"])
-        if "test" in dataset:
-            rows += list(dataset["test"])
-    except Exception as e:
-        print(f"[ERROR] Could not load dataset: {e}")
-        raise
+    base = os.environ.get(
+        "MTOP_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "data", "mtop"),
+    )
+    lang_dir = os.path.join(base, lang)
+
+    rows: list[dict] = []
+    for split in ("train.txt", "eval.txt", "test.txt"):
+        fpath = os.path.join(lang_dir, split)
+        if os.path.exists(fpath):
+            split_rows = load_mtop_tsv(fpath)
+            rows.extend(split_rows)
+            print(f"  Loaded {len(split_rows):>6} rows from {fpath}")
+        else:
+            print(f"  [skip] {fpath} not found")
+
+    if not rows:
+        print(
+            f"\n[ERROR] No MTOP files found under: {lang_dir}\n"
+            f"  Download the dataset from https://fb.me/mtop_dataset\n"
+            f"  and place the .txt files at:  data/mtop/{lang}/train.txt\n"
+            f"  or set the MTOP_PATH env var to your base directory.\n"
+        )
+        raise FileNotFoundError(f"No MTOP files found in {lang_dir}")
 
     if limit:
         rows = rows[:limit]
-    print(f"Loaded {len(rows)} rows")
+    print(f"Loaded {len(rows)} rows total")
 
     print("Parsing command-type intents (filtering out query/review)...")
     all_records: list[CausalRelationRecord] = []
