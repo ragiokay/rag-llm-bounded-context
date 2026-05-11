@@ -172,12 +172,12 @@ class TestParseRecordHappyPath:
     def test_policy_contains_intent(self):
         row = make_row()
         record = parse_record(row, 0)
-        assert "CREATE_REMINDER" in record.policy
+        assert "create_reminder" in record.policy
 
     def test_aggregate_is_object_part(self):
         row = make_row()
         record = parse_record(row, 0)
-        assert record.aggregate == "REMINDER"
+        assert record.aggregate == "reminder"
 
     def test_bounded_context_is_mtop(self):
         row = make_row()
@@ -218,7 +218,7 @@ class TestParseRecordHappyPath:
         row = make_row(text="Delete my 7am alarm", label_text="DELETE_ALARM")
         record = parse_record(row, 2)
         assert record is not None
-        assert record.aggregate == "ALARM"
+        assert record.aggregate == "alarm"
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ class TestEmbedAndStore:
             ids=[self.records[0].id], include=["metadatas"]
         )["metadatas"][0]
         assert "policy" in meta
-        assert "CREATE_REMINDER" in meta["policy"]
+        assert "create_reminder" in meta["policy"]
 
     def test_metadata_has_trigger_span(self):
         embed_and_store(self.records, self.col, self.model)
