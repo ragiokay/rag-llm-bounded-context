@@ -148,9 +148,9 @@ def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
         return None
 
     command_name = intent_to_command_name(intent)
-    aggregate = intent_to_aggregate(intent)
+    aggregate = intent_to_aggregate(intent).lower()
     trigger = extract_trigger_span(text)
-    clean_intent = intent.removeprefix("IN:")
+    clean_intent = intent.removeprefix("IN:").lower()
 
     try:
         return CausalRelationRecord(
@@ -238,15 +238,34 @@ def run(limit: int | None = None, lang: str = "en"):
 
     print("Parsing command-type intents (filtering out query/review)...")
     all_records: list[CausalRelationRecord] = []
-    skipped = 0
+    skipped_rows: list[dict] = []
     for idx, row in enumerate(rows):
         record = parse_record(row, idx)
         if record is None:
-            skipped += 1
+            skipped_rows.append(row)
         else:
             all_records.append(record)
 
-    print(f"Parsed {len(all_records)} command records ({skipped} query/review skipped)")
+    print(f"[filter] kept: {len(all_records)}, skipped: {len(skipped_rows)}")
+
+    # Save filter audit files so you can inspect what was kept vs dropped
+    kept_path    = os.path.join(lang_dir, "filtered_kept.txt")
+    skipped_path = os.path.join(lang_dir, "filtered_skipped.txt")
+    os.makedirs(lang_dir, exist_ok=True)
+
+    with open(kept_path, "w", encoding="utf-8") as f:
+        for r in all_records:
+            intent = r.policy.replace("command: ", "").upper()
+            f.write(f"{intent}\t{r.source_phrase}\n")
+
+    with open(skipped_path, "w", encoding="utf-8") as f:
+        for row in skipped_rows:
+            intent = str(row.get("intent") or row.get("label_text") or "")
+            text   = str(row.get("text") or row.get("utterance") or "")
+            f.write(f"{intent}\t{text}\n")
+
+    print(f"Saved kept    → {kept_path}")
+    print(f"Saved skipped → {skipped_path}")
 
     if not all_records:
         print("[WARN] No records parsed. Check dataset format.")
