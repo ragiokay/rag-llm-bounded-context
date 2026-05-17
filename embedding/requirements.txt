@@ -1,5 +1,6 @@
-chromadb
+qdrant-client
 sentence-transformers
 datasets
 pandas
+python-dotenv
 pydantic>=2.0

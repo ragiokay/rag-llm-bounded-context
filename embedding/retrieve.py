@@ -1,5 +1,5 @@
 # Retrieval interface for Prompt Generator
-# Flow: query_text (str) -> embed -> ChromaDB similarity search -> structured result
+# Flow: query_text (str) -> embed -> Qdrant similarity search -> structured result
 #
 # Prompt Generator usage:
 #   from retrieve import query_similar, query_all
@@ -10,11 +10,11 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
-import chromadb
+from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "vector_db")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 _model = None
 _client = None
@@ -30,16 +30,16 @@ def _get_model() -> SentenceTransformer:
     return _model
 
 
-def _get_client() -> chromadb.PersistentClient:
+def _get_client() -> QdrantClient:
     global _client
     if _client is None:
-        _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        _client = QdrantClient(url=QDRANT_URL)
     return _client
 
 
 def list_collections() -> list[str]:
-    """Return all collection names available in ChromaDB."""
-    return [c.name for c in _get_client().list_collections()]
+    """Return all collection names available in Qdrant."""
+    return [c.name for c in _get_client().get_collections().collections]
 
 
 def _build_result(distance: float, document: str, metadata: dict, collection: str) -> dict:
@@ -66,33 +66,36 @@ def query_similar(
     """
     Embed query_text and return n_results most similar records from one collection.
     Raises ValueError for empty/whitespace-only query.
-    Raises chromadb.errors.InvalidCollectionException if collection does not exist.
+    Raises exception if collection does not exist.
     """
     if not query_text or not query_text.strip():
         raise ValueError("query_text must not be empty")
 
-    embedding = _get_model().encode([query_text], show_progress_bar=False).tolist()
-    col = _get_client().get_collection(name=collection)
+    embedding = _get_model().encode([query_text], show_progress_bar=False).tolist()[0]
+    client = _get_client()
 
-    col_size = col.count()
+    col_info = client.get_collection(collection)
+    col_size = col_info.points_count
+
     safe_n = min(n_results, col_size)
     if safe_n == 0:
         return []
 
-    results = col.query(
-        query_embeddings=embedding,
-        n_results=safe_n,
-        include=["documents", "metadatas", "distances"],
+    response = client.query_points(
+        collection_name=collection,
+        query=embedding,
+        limit=safe_n,
+        with_payload=True,
     )
 
     return [
         _build_result(
-            results["distances"][0][i],
-            results["documents"][0][i],
-            results["metadatas"][0][i],
+            round(1 - result.score, 4),
+            result.payload.get("document", ""),
+            result.payload,
             collection,
         )
-        for i in range(len(results["ids"][0]))
+        for result in response.points
     ]
 
 

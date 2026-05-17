@@ -3,9 +3,9 @@ Test Plan — Retrieval Interface Module
 Module under test: embedding/retrieve.py (query_similar, query_all)
 
 Basic flow: Prompt Generator sends query_text (str) -> retrieve embeds it
--> ChromaDB similarity search -> structured {input, distance, collection, output}
+-> Qdrant similarity search -> structured {input, distance, collection, output}
 
-All tests use ChromaDB EphemeralClient + mock SentenceTransformer (384-dim).
+All tests use Qdrant in-memory client + mock SentenceTransformer (384-dim).
 No network access needed.
 """
 
@@ -13,14 +13,16 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "embedding"))
 
+import uuid
 import json
 import pytest
 import numpy as np
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
-# Test fixtures — in-memory ChromaDB + mock model
+# Test fixtures — in-memory Qdrant + mock model
 # ---------------------------------------------------------------------------
 
 EMBED_DIM = 384
@@ -81,22 +83,38 @@ def make_mock_model(seed: int = 42):
     return mock
 
 
+def _uuid(id_str: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, id_str))
+
+
+def _seed_collection(client, col_name, docs, model):
+    existing = [c.name for c in client.get_collections().collections]
+    if col_name not in existing:
+        client.create_collection(
+            collection_name=col_name,
+            vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+        )
+    texts = [d["text"] for d in docs]
+    embeddings = model.encode(texts, show_progress_bar=False).tolist()
+    points = [
+        PointStruct(
+            id=_uuid(d["id"]),
+            vector=embeddings[i],
+            payload={**d["meta"], "document": d["text"]},
+        )
+        for i, d in enumerate(docs)
+    ]
+    client.upsert(collection_name=col_name, points=points)
+
+
 @pytest.fixture
 def populated_client():
-    """EphemeralClient with both MAVEN and BPC collections seeded."""
-    client = chromadb.EphemeralClient()
+    """In-memory Qdrant client with both MAVEN and BPC collections seeded."""
+    client = QdrantClient(":memory:")
     model = make_mock_model()
 
     for col_name, docs in [(MAVEN_COL, MAVEN_DOCS), (BPC_COL, BPC_DOCS)]:
-        col = client.get_or_create_collection(col_name)
-        texts = [d["text"] for d in docs]
-        embeddings = model.encode(texts, show_progress_bar=False).tolist()
-        col.add(
-            ids=[d["id"] for d in docs],
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=[d["meta"] for d in docs],
-        )
+        _seed_collection(client, col_name, docs, model)
 
     return client
 
@@ -119,13 +137,9 @@ def make_retriever(client, model):
 
 class TestBasicFlow:
     def setup_method(self):
-        self.client = chromadb.EphemeralClient()
+        self.client = QdrantClient(":memory:")
         self.model = make_mock_model()
-        col = self.client.get_or_create_collection(MAVEN_COL)
-        texts = [d["text"] for d in MAVEN_DOCS]
-        embs = self.model.encode(texts, show_progress_bar=False).tolist()
-        col.add(ids=[d["id"] for d in MAVEN_DOCS], documents=texts,
-                embeddings=embs, metadatas=[d["meta"] for d in MAVEN_DOCS])
+        _seed_collection(self.client, MAVEN_COL, MAVEN_DOCS, self.model)
 
         import retrieve as r
         r._client = self.client
@@ -191,15 +205,11 @@ class TestBasicFlow:
 
 class TestCollectionSelection:
     def setup_method(self):
-        self.client = chromadb.EphemeralClient()
+        self.client = QdrantClient(":memory:")
         self.model = make_mock_model()
 
         for col_name, docs in [(MAVEN_COL, MAVEN_DOCS), (BPC_COL, BPC_DOCS)]:
-            col = self.client.get_or_create_collection(col_name)
-            texts = [d["text"] for d in docs]
-            embs = self.model.encode(texts, show_progress_bar=False).tolist()
-            col.add(ids=[d["id"] for d in docs], documents=texts,
-                    embeddings=embs, metadatas=[d["meta"] for d in docs])
+            _seed_collection(self.client, col_name, docs, self.model)
 
         import retrieve as r
         r._client = self.client
@@ -241,13 +251,9 @@ class TestCollectionSelection:
 
 class TestEdgeCases:
     def setup_method(self):
-        self.client = chromadb.EphemeralClient()
+        self.client = QdrantClient(":memory:")
         self.model = make_mock_model()
-        col = self.client.get_or_create_collection(MAVEN_COL)
-        texts = [d["text"] for d in MAVEN_DOCS]
-        embs = self.model.encode(texts, show_progress_bar=False).tolist()
-        col.add(ids=[d["id"] for d in MAVEN_DOCS], documents=texts,
-                embeddings=embs, metadatas=[d["meta"] for d in MAVEN_DOCS])
+        _seed_collection(self.client, MAVEN_COL, MAVEN_DOCS, self.model)
 
         import retrieve as r
         r._client = self.client
@@ -264,7 +270,7 @@ class TestEdgeCases:
             self.query_similar("   ", collection=MAVEN_COL)
 
     def test_gibberish_returns_results_without_crash(self):
-        # Model still produces a vector; ChromaDB still returns nearest neighbours
+        # Model still produces a vector; Qdrant still returns nearest neighbours
         results = self.query_similar("xkqz9!@#$%^&*()", collection=MAVEN_COL)
         assert isinstance(results, list)
         assert len(results) > 0
@@ -300,13 +306,9 @@ class TestEdgeCases:
 
 class TestOutputContract:
     def setup_method(self):
-        self.client = chromadb.EphemeralClient()
+        self.client = QdrantClient(":memory:")
         self.model = make_mock_model()
-        col = self.client.get_or_create_collection(MAVEN_COL)
-        texts = [d["text"] for d in MAVEN_DOCS]
-        embs = self.model.encode(texts, show_progress_bar=False).tolist()
-        col.add(ids=[d["id"] for d in MAVEN_DOCS], documents=texts,
-                embeddings=embs, metadatas=[d["meta"] for d in MAVEN_DOCS])
+        _seed_collection(self.client, MAVEN_COL, MAVEN_DOCS, self.model)
 
         import retrieve as r
         r._client = self.client

@@ -8,9 +8,11 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "embedding"))
 
+import uuid
 import pytest
-import chromadb
 import numpy as np
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance
 from unittest.mock import MagicMock
 from causal_transform import CausalRelationRecord
 from seed_maven_ere import parse_document, embed_and_store, RELATION_TYPES
@@ -147,10 +149,11 @@ class TestParseDocumentBoundary:
 
 
 # ---------------------------------------------------------------------------
-# Integration: embed_and_store -> ChromaDB round-trip
+# Integration: embed_and_store -> Qdrant round-trip
 # ---------------------------------------------------------------------------
 
 EMBED_DIM = 384
+COLLECTION_NAME = "test_maven"
 
 
 def make_mock_model(seed=42):
@@ -162,50 +165,99 @@ def make_mock_model(seed=42):
     return mock
 
 
+def _uuid(id_str: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, id_str))
+
+
 class TestEmbedAndStore:
     def setup_method(self):
-        self.client = chromadb.EphemeralClient()
+        self.client = QdrantClient(":memory:")
+        self.client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+        )
         self.model = make_mock_model()
-        self.col = self.client.get_or_create_collection("test_maven")
         self.records = parse_document(make_doc())
 
+        # Patch embed_and_store to use in-memory client
+        import seed_maven_ere
+        self._orig_qdrant_url = seed_maven_ere.QDRANT_URL
+        # We'll monkey-patch QdrantClient inside embed_and_store
+        self._client = self.client
+
+    def _run_embed_and_store(self, records=None, col=COLLECTION_NAME):
+        """Run embed_and_store but with our in-memory client."""
+        import seed_maven_ere
+        orig = seed_maven_ere.QdrantClient
+
+        def fake_client(url=None):
+            return self._client
+
+        seed_maven_ere.QdrantClient = fake_client
+        try:
+            result = embed_and_store(records if records is not None else self.records,
+                                     col, self.model)
+        finally:
+            seed_maven_ere.QdrantClient = orig
+        return result
+
     def test_written_count_matches(self):
-        written = embed_and_store(self.records, self.col, self.model)
+        written = self._run_embed_and_store()
         assert written == len(self.records)
 
     def test_empty_records_writes_zero(self):
-        assert embed_and_store([], self.col, self.model) == 0
+        assert self._run_embed_and_store(records=[]) == 0
 
     def test_retrieve_by_id(self):
-        embed_and_store(self.records, self.col, self.model)
-        result = self.col.get(ids=[self.records[0].id])
-        assert result["ids"] == [self.records[0].id]
+        self._run_embed_and_store()
+        record = self.records[0]
+        results = self.client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[_uuid(record.id)],
+            with_payload=True,
+        )
+        assert len(results) == 1
+        assert results[0].id == _uuid(record.id)
 
     def test_metadata_has_policy(self):
-        embed_and_store(self.records, self.col, self.model)
-        meta = self.col.get(
-            ids=[self.records[0].id], include=["metadatas"]
-        )["metadatas"][0]
+        self._run_embed_and_store()
+        record = self.records[0]
+        results = self.client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[_uuid(record.id)],
+            with_payload=True,
+        )
+        meta = results[0].payload
         assert "policy" in meta
         assert "thunderstorm" in meta["policy"]
 
     def test_metadata_has_bounded_context(self):
-        embed_and_store(self.records, self.col, self.model)
-        meta = self.col.get(
-            ids=[self.records[0].id], include=["metadatas"]
-        )["metadatas"][0]
+        self._run_embed_and_store()
+        record = self.records[0]
+        results = self.client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[_uuid(record.id)],
+            with_payload=True,
+        )
+        meta = results[0].payload
         assert meta["bounded_context"] == "Weather Events"
 
     def test_vector_dimension(self):
-        embed_and_store(self.records, self.col, self.model)
-        embs = self.col.get(
-            ids=[self.records[0].id], include=["embeddings"]
-        )["embeddings"]
-        assert len(embs[0]) == EMBED_DIM
+        self._run_embed_and_store()
+        record = self.records[0]
+        results = self.client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[_uuid(record.id)],
+            with_vectors=True,
+        )
+        assert len(results[0].vector) == EMBED_DIM
 
     def test_document_matches_embed_text(self):
-        embed_and_store(self.records, self.col, self.model)
-        docs = self.col.get(
-            ids=[self.records[0].id], include=["documents"]
-        )["documents"]
-        assert docs[0] == self.records[0].embed_text
+        self._run_embed_and_store()
+        record = self.records[0]
+        results = self.client.retrieve(
+            collection_name=COLLECTION_NAME,
+            ids=[_uuid(record.id)],
+            with_payload=True,
+        )
+        assert results[0].payload["document"] == record.embed_text

@@ -1,8 +1,8 @@
 # MAVEN-ERE Dataset Loader
-# Parses CAUSE/PRECONDITION relations into CausalRelationRecord and embeds into ChromaDB.
+# Parses CAUSE/PRECONDITION relations into CausalRelationRecord and embeds into Qdrant.
 #
 # Input  (what gets embedded): the sentence containing the cause event trigger
-# Output (ChromaDB metadata) : cause trigger word + effect trigger word + relation type
+# Output (Qdrant payload)    : cause trigger word + effect trigger word + relation type
 #
 # Example:
 #   Input : "The match was postponed because of a thunderstorm."
@@ -10,13 +10,15 @@
 
 import os
 import sys
+import uuid
 sys.path.insert(0, os.path.dirname(__file__))
 
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
 from sentence_transformers import SentenceTransformer
 from causal_transform import CausalRelationRecord
 
-CHROMA_PATH = "../vector_db"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "maven_ere_causal"
 MODEL_NAME = "all-MiniLM-L6-v2"
 RELATION_TYPES = {"CAUSE", "PRECONDITION"}
@@ -98,20 +100,35 @@ def parse_document(doc: dict) -> list[CausalRelationRecord]:
 
 
 def embed_and_store(records: list[CausalRelationRecord],
-                    collection, model: SentenceTransformer,
+                    collection: str, model: SentenceTransformer,
                     batch_size: int = 256) -> int:
-    """Embeds records in batches and upserts into ChromaDB. Returns count written."""
+    """Embeds records in batches and upserts into Qdrant. Returns count written."""
+    if not records:
+        return 0
+
+    client = QdrantClient(url=QDRANT_URL)
+
+    existing = [c.name for c in client.get_collections().collections]
+    if collection not in existing:
+        client.create_collection(
+            collection_name=collection,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        )
+
     written = 0
     for i in range(0, len(records), batch_size):
         batch = records[i: i + batch_size]
         texts = [r.embed_text for r in batch]
         embeddings = model.encode(texts, show_progress_bar=False).tolist()
-        collection.upsert(
-            ids=[r.id for r in batch],
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=[r.to_chroma_metadata() for r in batch],
-        )
+        points = [
+            PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r.id)),
+                vector=embeddings[j],
+                payload={**r.to_chroma_metadata(), "document": r.embed_text},
+            )
+            for j, r in enumerate(batch)
+        ]
+        client.upsert(collection_name=collection, points=points)
         written += len(batch)
         print(f"  [{written}/{len(records)}] written", end="\r")
     print()
@@ -120,7 +137,7 @@ def embed_and_store(records: list[CausalRelationRecord],
 
 def run(limit_docs: int | None = None):
     """
-    Full pipeline: HuggingFace download -> parse -> embed -> ChromaDB.
+    Full pipeline: HuggingFace download -> parse -> embed -> Qdrant.
 
     Args:
         limit_docs: cap on number of documents to process (None = all).
@@ -177,10 +194,8 @@ def run(limit_docs: int | None = None):
 
     print(f"Embedding with {MODEL_NAME}...")
     model = SentenceTransformer(MODEL_NAME)
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
-    written = embed_and_store(all_records, collection, model)
+    written = embed_and_store(all_records, COLLECTION_NAME, model)
     print(f"=== Done: {written} vectors in collection '{COLLECTION_NAME}' ===")
 
 

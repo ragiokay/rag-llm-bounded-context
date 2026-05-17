@@ -1,5 +1,5 @@
 # MTOP Dataset Loader
-# Filters command-type intents from MTOP and embeds them into ChromaDB as
+# Filters command-type intents from MTOP and embeds them into Qdrant as
 # Event Storming Command examples for the Prompt Generator.
 #
 # Only command-like intents (CREATE_*, DELETE_*, SEND_*, etc.) are stored.
@@ -14,13 +14,15 @@
 
 import os
 import sys
+import uuid
 sys.path.insert(0, os.path.dirname(__file__))
 
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
 from sentence_transformers import SentenceTransformer
 from causal_transform import CausalRelationRecord
 
-CHROMA_PATH = "../vector_db"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "mtop_commands"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -169,20 +171,35 @@ def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
 
 
 def embed_and_store(records: list[CausalRelationRecord],
-                    collection, model: SentenceTransformer,
+                    collection: str, model: SentenceTransformer,
                     batch_size: int = 256) -> int:
-    """Embeds records in batches and upserts into ChromaDB. Returns count written."""
+    """Embeds records in batches and upserts into Qdrant. Returns count written."""
+    if not records:
+        return 0
+
+    client = QdrantClient(url=QDRANT_URL)
+
+    existing = [c.name for c in client.get_collections().collections]
+    if collection not in existing:
+        client.create_collection(
+            collection_name=collection,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        )
+
     written = 0
     for i in range(0, len(records), batch_size):
         batch = records[i: i + batch_size]
         texts = [r.embed_text for r in batch]
         embeddings = model.encode(texts, show_progress_bar=False).tolist()
-        collection.upsert(
-            ids=[r.id for r in batch],
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=[r.to_chroma_metadata() for r in batch],
-        )
+        points = [
+            PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r.id)),
+                vector=embeddings[j],
+                payload={**r.to_chroma_metadata(), "document": r.embed_text},
+            )
+            for j, r in enumerate(batch)
+        ]
+        client.upsert(collection_name=collection, points=points)
         written += len(batch)
         print(f"  [{written}/{len(records)}] written", end="\r")
     print()
@@ -191,7 +208,7 @@ def embed_and_store(records: list[CausalRelationRecord],
 
 def run(limit: int | None = None, lang: str = "en"):
     """
-    Full pipeline: local TSV files -> filter -> embed -> ChromaDB.
+    Full pipeline: local TSV files -> filter -> embed -> Qdrant.
 
     Expects the official Facebook MTOP release laid out as:
         data/mtop/<lang>/train.txt   (required)
@@ -283,10 +300,8 @@ def run(limit: int | None = None, lang: str = "en"):
 
     print(f"Embedding with {MODEL_NAME}...")
     model = SentenceTransformer(MODEL_NAME)
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
 
-    written = embed_and_store(all_records, collection, model)
+    written = embed_and_store(all_records, COLLECTION_NAME, model)
     print(f"=== Done: {written} vectors in collection '{COLLECTION_NAME}' ===")
 
 
