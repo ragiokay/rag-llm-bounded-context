@@ -80,8 +80,8 @@ def load_bpc() -> tuple[list[dict], list[str]]:
     df = dataset["train"].to_pandas()
     print(f"Downloaded {len(df)} rows, columns: {df.columns.tolist()}")
 
-    # qid is the dataset's own stable identifier; rename to "id" for transform_row
-    df = df.rename(columns={"qid": "id"})
+    # Use the dataframe index as id — qid is not unique across domains
+    df["id"] = df.index.astype(str)
     rows = df.to_dict("records")
     domains = sorted(df["domain"].unique().tolist())
     return rows, domains
