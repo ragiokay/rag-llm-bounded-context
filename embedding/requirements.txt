@@ -1,5 +1,5 @@
 chromadb
 sentence-transformers
-mysql-connector-python
-python-dotenv
+datasets
+pandas
 pydantic>=2.0

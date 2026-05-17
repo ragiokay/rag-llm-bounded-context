@@ -3,15 +3,20 @@
 # BFR7: Review and clean vector space
 # IIR3: Embedding Module and Vector Database
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+
 import chromadb
 from sentence_transformers import SentenceTransformer
-from fetch_from_db import fetch_all, fetch_distinct_domains
+from datasets import load_dataset
 from causal_transform import transform_batch, CausalRelationRecord
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 model = SentenceTransformer(MODEL_NAME)
 
-chroma_client = chromadb.PersistentClient(path="../vector_db")
+CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "vector_db")
+chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
 
 
 def embed_records(collection_name: str, records: list[CausalRelationRecord]) -> int:
@@ -68,12 +73,25 @@ def review_collection(collection_name: str) -> bool:
     return True
 
 
+def load_bpc() -> tuple[list[dict], list[str]]:
+    """Download BPC dataset from HuggingFace and return (rows, domains)."""
+    print("Downloading BPC dataset from HuggingFace (ibm-research/BPC)...")
+    dataset = load_dataset("ibm-research/BPC")
+    df = dataset["train"].to_pandas()
+    print(f"Downloaded {len(df)} rows, columns: {df.columns.tolist()}")
+
+    # qid is the dataset's own stable identifier; rename to "id" for transform_row
+    df = df.rename(columns={"qid": "id"})
+    rows = df.to_dict("records")
+    domains = sorted(df["domain"].unique().tolist())
+    return rows, domains
+
+
 def run():
-    """Full pipeline: MySQL -> transform -> embed -> ChromaDB -> review."""
+    """Full pipeline: HuggingFace -> transform -> embed -> ChromaDB -> review."""
     print("=== Embedding Module Start ===")
 
-    all_rows = fetch_all()
-    domains = fetch_distinct_domains()
+    all_rows, domains = load_bpc()
     print(f"[run] Domains: {domains}")
 
     total_written = 0

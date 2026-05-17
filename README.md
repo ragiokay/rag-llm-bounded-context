@@ -11,16 +11,14 @@ This system takes a software use case description (in JSON format) and automatic
 
 ### Pipeline Overview
 ```
-MySQL (relational DB) 
-↓ Embedding Module reads datasets 
-ChromaDB (vector DB) 
-↓ Prompt Generator queries similar context 
-Prompt Generator 
-↓ Sends augmented prompts 
-RAG-LLM 
-↓ Identifies Bounded Contexts 
-Bounded Context Module 
-↓ Returns structured JSON output 
+ChromaDB (vector DB)
+↓ Prompt Generator queries similar context
+Prompt Generator
+↓ Sends augmented prompts
+RAG-LLM
+↓ Identifies Bounded Contexts
+Bounded Context Module
+↓ Returns structured JSON output
 User
 ```
 ---
@@ -29,18 +27,15 @@ User
 
 ```
 rag-llm-bounded-context/
-├── database/               # Database Module (BFR1–BFR4)
-│   ├── schema.sql          # MySQL schema definition
-│   ├── seed.py             # Downloads BPC dataset and loads into MySQL
+├── embedding/              # Embedding Module
+│   ├── embed.py            # Downloads BPC from HuggingFace, embeds into ChromaDB
+│   ├── seed_maven_ere.py   # Loads MAVEN-ERE, embeds into ChromaDB
+│   ├── seed_mtop.py        # Loads MTOP, embeds into ChromaDB
+│   ├── retrieve.py         # Retrieval interface for Prompt Generator
+│   ├── causal_transform.py # BPC row → CausalRelationRecord (DDD schema)
+│   ├── reset_collections.py
 │   └── requirements.txt
-├── embedding/              # Embedding Module (BFR5–BFR7)
-│   ├── fetch_from_db.py    # Retrieves datasets from MySQL (IIR1)
-│   ├── embed.py            # Converts records to vectors, stores in ChromaDB (IIR3)
-│   └── requirements.txt
-├── prompt_generator/       # (WIP) Assembles augmented prompts (IIR2, IIR4)
-├── rag_llm/                # (WIP) LLM inference module
-├── bounded_context/        # (WIP) Bounded Context output module
-├── .env.example            # Environment variable template
+├── tests/
 ├── .gitignore
 └── README.md
 ```
@@ -49,7 +44,6 @@ rag-llm-bounded-context/
 ## Requirements
 
 - Python 3.11+
-- MySQL 8.0+
 - Git
 
 ---
@@ -61,55 +55,47 @@ rag-llm-bounded-context/
 ```bash
 git clone https://github.com/ragiokay/rag-llm-bounded-context.git
 cd rag-llm-bounded-context
-````
-
-### 2. Create your `.env` file
-
-```bash
-copy .env.example .env
 ```
 
-Open `.env` and fill in your MySQL credentials:
-
-```
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=bpc_db
-```
-
-### 3. Set up MySQL database
-
-```bash
-mysql -u root -p < database/schema.sql
-```
-
-### 4. Install dependencies and load dataset into MySQL
-
-```bash
-pip install -r database/requirements.txt
-python database/seed.py
-```
-
-This downloads the BPC dataset from HuggingFace (3,077 rows) and loads it into MySQL.
-
-### 5. Install dependencies and generate vector space
+### 2. Install dependencies
 
 ```bash
 pip install -r embedding/requirements.txt
+```
+
+### 3. Build the vector database
+
+```bash
 python embedding/embed.py
 ```
 
-This reads from MySQL, converts all records into vectors using `all-MiniLM-L6-v2`, and stores them in ChromaDB under `vector_db/`. 9 collections are created, one per domain.
+This downloads the BPC dataset from HuggingFace (3,077 rows), converts all records into vectors using `all-MiniLM-L6-v2`, and stores them in `vector_db/`. 9 collections are created, one per domain.
+
+Optionally, add the MAVEN-ERE and MTOP datasets:
+
+```bash
+# MAVEN-ERE (requires local data/maven_ere/train.jsonl, or falls back to HuggingFace mirror)
+python embedding/seed_maven_ere.py
+
+# MTOP (requires local data/mtop/en/train.txt — download from https://fb.me/mtop_dataset)
+python embedding/seed_mtop.py
+```
+
+### 4. Test retrieval
+
+```bash
+python embedding/retrieve.py
+```
 
 ---
 
 ## Datasets
 
-|Dataset|Source|Rows|Domain|
-|---|---|---|---|
-|BPC|[ibm-research/BPC](https://huggingface.co/datasets/ibm-research/BPC)|3,077|Business Process Causal Reasoning|
+| Dataset   | Source                                                      | Rows  | Domain                           |
+|-----------|-------------------------------------------------------------|-------|----------------------------------|
+| BPC       | [ibm-research/BPC](https://huggingface.co/datasets/ibm-research/BPC) | 3,077 | Business Process Causal Reasoning |
+| MAVEN-ERE | [THU-KEG/MAVEN-ERE](https://github.com/THU-KEG/MAVEN-ERE)  | —     | Event Causal Relations           |
+| MTOP      | [fb.me/mtop_dataset](https://fb.me/mtop_dataset)           | —     | Task-Oriented Parsing (commands) |
 
 ---
 
@@ -117,36 +103,44 @@ This reads from MySQL, converts all records into vectors using `all-MiniLM-L6-v2
 
 After running `embed.py`, the following collections are available in `vector_db/`:
 
-|Collection|Domain|Vectors|
-|---|---|---|
-|bpc_education|Education|327|
-|bpc_finance|Finance|391|
-|bpc_human_resources|Human Resources|381|
-|bpc_insurance|Insurance|272|
-|bpc_logistics|Logistics|296|
-|bpc_manufacturing|Manufacturing|364|
-|bpc_medical|Medical|345|
-|bpc_retail|Retail|232|
-|bpc_transportation|Transportation|469|
+| Collection             | Domain           | Vectors |
+|------------------------|------------------|---------|
+| bpc_education          | Education        | 327     |
+| bpc_finance            | Finance          | 391     |
+| bpc_human_resources    | Human Resources  | 381     |
+| bpc_insurance          | Insurance        | 272     |
+| bpc_logistics          | Logistics        | 296     |
+| bpc_manufacturing      | Manufacturing    | 364     |
+| bpc_medical            | Medical          | 345     |
+| bpc_retail             | Retail           | 232     |
+| bpc_transportation     | Transportation   | 469     |
+
+After running `seed_maven_ere.py`:
+
+| Collection        | Domain              |
+|-------------------|---------------------|
+| maven_ere_causal  | Event causal pairs  |
+
+After running `seed_mtop.py`:
+
+| Collection     | Domain                  |
+|----------------|-------------------------|
+| mtop_commands  | Task-oriented commands  |
 
 ---
 
 ## Notes
 
-- `vector_db/` is not committed to Git. It is generated locally by running `embed.py`.
-- `.env` is not committed to Git. Never commit real credentials.
-- MySQL is the source of truth. ChromaDB can always be rebuilt from MySQL.
+- `vector_db/` is not committed to Git. Generate it locally by running the seed scripts.
+- `data/` (raw dataset files) is not committed to Git.
 
 ---
 
 ## Requirements Traceability
 
-|Code|Requirement|Implemented In|
-|---|---|---|
-|BFR1|Schema definition|`database/schema.sql`|
-|BFR2|Data storage|`database/seed.py`|
-|BFR5|Organize and clean datasets|`embedding/embed.py`|
-|BFR6|Transfer datasets into vector space|`embedding/embed.py`|
-|BFR7|Review and clean vector space|`embedding/embed.py`|
-|IIR1|Database ↔ Embedding Module|`embedding/fetch_from_db.py`|
-|IIR3|Embedding Module ↔ Vector Database|`embedding/embed.py`|
+| Code | Requirement                       | Implemented In              |
+|------|-----------------------------------|-----------------------------|
+| BFR5 | Organize and clean datasets       | `embedding/embed.py`        |
+| BFR6 | Transfer datasets into vector space | `embedding/embed.py`      |
+| BFR7 | Review and clean vector space     | `embedding/embed.py`        |
+| IIR3 | Embedding Module ↔ Vector Database | `embedding/embed.py`       |

@@ -132,37 +132,39 @@ if __name__ == "__main__":
     cols = list_collections()
     print(f"Available collections: {cols}\n")
 
-    # --- query_similar: MAVEN-ERE ---
+    if not cols:
+        print("No collections found. Run embed.py (and optionally seed_maven_ere.py / seed_mtop.py) first.")
+        raise SystemExit(1)
+
+    # --- TEST 1: query_similar against the first available collection ---
     print("=" * 60)
-    print("TEST 1: query_similar — MAVEN-ERE")
+    print(f"TEST 1: query_similar — {cols[0]}")
     print("=" * 60)
     q = "The storm caused severe flooding in the region."
     print(f"Query: \"{q}\"\n")
-    for rank, r in enumerate(query_similar(q, collection="maven_ere_causal", n_results=3), 1):
+    for rank, r in enumerate(query_similar(q, collection=cols[0], n_results=3), 1):
         print(f"  Rank {rank}  distance={r['distance']}")
         print(f"    input  : {r['input'][:100]}")
         print(f"    policy : {r['output']['policy']}")
         print(f"    context: {r['output']['bounded_context']}")
     print()
 
-    # --- query_similar: BPC ---
+    # --- TEST 2: query_similar — BPC if present, else second available collection ---
     bpc_cols = [c for c in cols if c.startswith("bpc_")]
-    if bpc_cols:
-        print("=" * 60)
-        print(f"TEST 2: query_similar — BPC ({bpc_cols[0]})")
-        print("=" * 60)
-        q = "Inventory shortages led to production delays."
-        print(f"Query: \"{q}\"\n")
-        for rank, r in enumerate(query_similar(q, collection=bpc_cols[0], n_results=3), 1):
-            print(f"  Rank {rank}  distance={r['distance']}")
-            print(f"    input  : {r['input'][:100]}")
-            print(f"    policy : {r['output']['policy']}")
-            print(f"    context: {r['output']['bounded_context']}")
-        print()
-    else:
-        print("TEST 2: BPC collections not found — run embed.py first\n")
+    test2_col = bpc_cols[0] if bpc_cols else (cols[1] if len(cols) > 1 else cols[0])
+    print("=" * 60)
+    print(f"TEST 2: query_similar — {test2_col}")
+    print("=" * 60)
+    q = "Inventory shortages led to production delays."
+    print(f"Query: \"{q}\"\n")
+    for rank, r in enumerate(query_similar(q, collection=test2_col, n_results=3), 1):
+        print(f"  Rank {rank}  distance={r['distance']}")
+        print(f"    input  : {r['input'][:100]}")
+        print(f"    policy : {r['output']['policy']}")
+        print(f"    context: {r['output']['bounded_context']}")
+    print()
 
-    # --- query_all: cross-collection ---
+    # --- TEST 3: query_all — cross-collection ---
     print("=" * 60)
     print("TEST 3: query_all — search all collections")
     print("=" * 60)
@@ -174,10 +176,10 @@ if __name__ == "__main__":
         print(f"    policy : {r['output']['policy']}")
     print()
 
-    # --- full output shape ---
+    # --- TEST 4: full output shape (JSON) ---
     print("=" * 60)
     print("TEST 4: full output shape (JSON)")
     print("=" * 60)
     r = query_similar("Political crisis led to government collapse.",
-                      collection="maven_ere_causal", n_results=1)[0]
+                      collection=cols[0], n_results=1)[0]
     print(json.dumps(r, ensure_ascii=False, indent=2))
