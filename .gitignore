@@ -228,3 +228,6 @@ data/maven_ere/*.json
 
 # Vector DB local files
 vector_db/
+
+# Claude Code working directory
+.claude/
