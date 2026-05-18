@@ -1,5 +1,6 @@
-chromadb
+qdrant-client>=1.14,<1.17
 sentence-transformers
-mysql-connector-python
+datasets
+pandas
 python-dotenv
 pydantic>=2.0

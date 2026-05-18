@@ -1,5 +1,5 @@
 # Retrieval interface for Prompt Generator
-# Flow: query_text (str) -> embed -> ChromaDB similarity search -> structured result
+# Flow: query_text (str) -> embed -> Qdrant similarity search -> structured result
 #
 # Prompt Generator usage:
 #   from retrieve import query_similar, query_all
@@ -10,11 +10,11 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
-import chromadb
+from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "vector_db")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 _model = None
 _client = None
@@ -30,16 +30,16 @@ def _get_model() -> SentenceTransformer:
     return _model
 
 
-def _get_client() -> chromadb.PersistentClient:
+def _get_client() -> QdrantClient:
     global _client
     if _client is None:
-        _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        _client = QdrantClient(url=QDRANT_URL, timeout=300)
     return _client
 
 
 def list_collections() -> list[str]:
-    """Return all collection names available in ChromaDB."""
-    return [c.name for c in _get_client().list_collections()]
+    """Return all collection names available in Qdrant."""
+    return [c.name for c in _get_client().get_collections().collections]
 
 
 def _build_result(distance: float, document: str, metadata: dict, collection: str) -> dict:
@@ -66,33 +66,36 @@ def query_similar(
     """
     Embed query_text and return n_results most similar records from one collection.
     Raises ValueError for empty/whitespace-only query.
-    Raises chromadb.errors.InvalidCollectionException if collection does not exist.
+    Raises exception if collection does not exist.
     """
     if not query_text or not query_text.strip():
         raise ValueError("query_text must not be empty")
 
-    embedding = _get_model().encode([query_text], show_progress_bar=False).tolist()
-    col = _get_client().get_collection(name=collection)
+    embedding = _get_model().encode([query_text], show_progress_bar=False).tolist()[0]
+    client = _get_client()
 
-    col_size = col.count()
+    col_info = client.get_collection(collection)
+    col_size = col_info.points_count
+
     safe_n = min(n_results, col_size)
     if safe_n == 0:
         return []
 
-    results = col.query(
-        query_embeddings=embedding,
-        n_results=safe_n,
-        include=["documents", "metadatas", "distances"],
+    response = client.query_points(
+        collection_name=collection,
+        query=embedding,
+        limit=safe_n,
+        with_payload=True,
     )
 
     return [
         _build_result(
-            results["distances"][0][i],
-            results["documents"][0][i],
-            results["metadatas"][0][i],
+            round(1 - result.score, 4),
+            result.payload.get("document", ""),
+            result.payload,
             collection,
         )
-        for i in range(len(results["ids"][0]))
+        for result in response.points
     ]
 
 
@@ -128,41 +131,47 @@ def query_all(
 if __name__ == "__main__":
     import json
 
-    print("=== Retrieval Demo ===")
-    cols = list_collections()
-    print(f"Available collections: {cols}\n")
+    prefix = os.getenv("COLLECTION_PREFIX", "")
 
-    # --- query_similar: MAVEN-ERE ---
+    print("=== Retrieval Demo ===")
+    all_cols = list_collections()
+    cols = [c for c in all_cols if c.startswith(prefix)] if prefix else all_cols
+    print(f"All collections on server : {len(all_cols)}")
+    print(f"Our collections (prefix='{prefix}'): {cols}\n")
+
+    if not cols:
+        print("No collections found. Run embed.py (and optionally seed_maven_ere.py / seed_mtop.py) first.")
+        raise SystemExit(1)
+
+    # --- TEST 1: query_similar against the first available collection ---
     print("=" * 60)
-    print("TEST 1: query_similar — MAVEN-ERE")
+    print(f"TEST 1: query_similar — {cols[0]}")
     print("=" * 60)
     q = "The storm caused severe flooding in the region."
     print(f"Query: \"{q}\"\n")
-    for rank, r in enumerate(query_similar(q, collection="maven_ere_causal", n_results=3), 1):
+    for rank, r in enumerate(query_similar(q, collection=cols[0], n_results=3), 1):
         print(f"  Rank {rank}  distance={r['distance']}")
         print(f"    input  : {r['input'][:100]}")
         print(f"    policy : {r['output']['policy']}")
         print(f"    context: {r['output']['bounded_context']}")
     print()
 
-    # --- query_similar: BPC ---
+    # --- TEST 2: query_similar — BPC if present, else second available collection ---
     bpc_cols = [c for c in cols if c.startswith("bpc_")]
-    if bpc_cols:
-        print("=" * 60)
-        print(f"TEST 2: query_similar — BPC ({bpc_cols[0]})")
-        print("=" * 60)
-        q = "Inventory shortages led to production delays."
-        print(f"Query: \"{q}\"\n")
-        for rank, r in enumerate(query_similar(q, collection=bpc_cols[0], n_results=3), 1):
-            print(f"  Rank {rank}  distance={r['distance']}")
-            print(f"    input  : {r['input'][:100]}")
-            print(f"    policy : {r['output']['policy']}")
-            print(f"    context: {r['output']['bounded_context']}")
-        print()
-    else:
-        print("TEST 2: BPC collections not found — run embed.py first\n")
+    test2_col = bpc_cols[0] if bpc_cols else (cols[1] if len(cols) > 1 else cols[0])
+    print("=" * 60)
+    print(f"TEST 2: query_similar — {test2_col}")
+    print("=" * 60)
+    q = "Inventory shortages led to production delays."
+    print(f"Query: \"{q}\"\n")
+    for rank, r in enumerate(query_similar(q, collection=test2_col, n_results=3), 1):
+        print(f"  Rank {rank}  distance={r['distance']}")
+        print(f"    input  : {r['input'][:100]}")
+        print(f"    policy : {r['output']['policy']}")
+        print(f"    context: {r['output']['bounded_context']}")
+    print()
 
-    # --- query_all: cross-collection ---
+    # --- TEST 3: query_all — cross-collection ---
     print("=" * 60)
     print("TEST 3: query_all — search all collections")
     print("=" * 60)
@@ -174,10 +183,10 @@ if __name__ == "__main__":
         print(f"    policy : {r['output']['policy']}")
     print()
 
-    # --- full output shape ---
+    # --- TEST 4: full output shape (JSON) ---
     print("=" * 60)
     print("TEST 4: full output shape (JSON)")
     print("=" * 60)
     r = query_similar("Political crisis led to government collapse.",
-                      collection="maven_ere_causal", n_results=1)[0]
+                      collection=cols[0], n_results=1)[0]
     print(json.dumps(r, ensure_ascii=False, indent=2))

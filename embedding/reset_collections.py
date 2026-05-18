@@ -1,4 +1,4 @@
-# Maintenance utility — delete ChromaDB collections by prefix or name
+# Maintenance utility — delete Qdrant collections by prefix or name
 #
 # Usage:
 #   python reset_collections.py --prefix bpc_        # delete all bpc_* collections
@@ -8,33 +8,33 @@
 
 import os
 import argparse
-import chromadb
+from qdrant_client import QdrantClient
 
-CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "vector_db")
-
-
-def list_collections(client: chromadb.PersistentClient) -> list[str]:
-    return [c.name for c in client.list_collections()]
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 
-def delete_by_prefix(client: chromadb.PersistentClient, prefix: str) -> list[str]:
+def list_collections(client: QdrantClient) -> list[str]:
+    return [c.name for c in client.get_collections().collections]
+
+
+def delete_by_prefix(client: QdrantClient, prefix: str) -> list[str]:
     targets = [n for n in list_collections(client) if n.startswith(prefix)]
     for name in targets:
-        client.delete_collection(name)
+        client.delete_collection(collection_name=name)
         print(f"  Deleted: {name}")
     return targets
 
 
-def delete_all(client: chromadb.PersistentClient) -> list[str]:
+def delete_all(client: QdrantClient) -> list[str]:
     targets = list_collections(client)
     for name in targets:
-        client.delete_collection(name)
+        client.delete_collection(collection_name=name)
         print(f"  Deleted: {name}")
     return targets
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reset ChromaDB collections")
+    parser = argparse.ArgumentParser(description="Reset Qdrant collections")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--prefix", metavar="PREFIX",
                        help="Delete all collections whose name starts with PREFIX")
@@ -44,14 +44,14 @@ def main():
                        help="List collections without deleting")
     args = parser.parse_args()
 
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    client = QdrantClient(url=QDRANT_URL, timeout=300)
     collections = list_collections(client)
 
     if args.list:
         if not collections:
             print("No collections found.")
         for name in collections:
-            count = client.get_collection(name).count()
+            count = client.get_collection(name).points_count
             print(f"  {name}  ({count} vectors)")
         return
 
