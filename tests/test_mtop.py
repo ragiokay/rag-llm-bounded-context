@@ -296,7 +296,7 @@ class TestEmbedAndStore:
         import seed_mtop
         orig = seed_mtop.QdrantClient
 
-        def fake_client(url=None):
+        def fake_client(url=None, **kwargs):
             return self._client
 
         seed_mtop.QdrantClient = fake_client

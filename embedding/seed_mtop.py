@@ -178,7 +178,7 @@ def embed_and_store(records: list[CausalRelationRecord],
     if not records:
         return 0
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(url=QDRANT_URL, timeout=300)
 
     existing = [c.name for c in client.get_collections().collections]
     if collection not in existing:

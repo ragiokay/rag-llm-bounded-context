@@ -33,7 +33,7 @@ def _get_model() -> SentenceTransformer:
 def _get_client() -> QdrantClient:
     global _client
     if _client is None:
-        _client = QdrantClient(url=QDRANT_URL)
+        _client = QdrantClient(url=QDRANT_URL, timeout=300)
     return _client
 
 

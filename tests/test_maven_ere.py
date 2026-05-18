@@ -190,7 +190,7 @@ class TestEmbedAndStore:
         import seed_maven_ere
         orig = seed_maven_ere.QdrantClient
 
-        def fake_client(url=None):
+        def fake_client(url=None, **kwargs):
             return self._client
 
         seed_maven_ere.QdrantClient = fake_client

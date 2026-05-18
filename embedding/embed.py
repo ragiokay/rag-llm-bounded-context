@@ -26,11 +26,12 @@ _qdrant_client = None
 def _get_client() -> QdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = QdrantClient(url=QDRANT_URL)
+        _qdrant_client = QdrantClient(url=QDRANT_URL, timeout=300)
     return _qdrant_client
 
 
-def embed_records(collection_name: str, records: list[CausalRelationRecord]) -> int:
+def embed_records(collection_name: str, records: list[CausalRelationRecord],
+                  batch_size: int = 128) -> int:
     """
     BFR6: Embeds CausalRelationRecord objects into a Qdrant collection.
     Metadata stored is the full DDD schema so the Prompt Generator can use
@@ -54,16 +55,22 @@ def embed_records(collection_name: str, records: list[CausalRelationRecord]) -> 
     texts = [r.embed_text for r in records]
     embeddings = model.encode(texts, show_progress_bar=True).tolist()
 
-    points = [
-        PointStruct(
-            id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r.id)),
-            vector=embeddings[i],
-            payload={**r.to_chroma_metadata(), "document": r.embed_text},
-        )
-        for i, r in enumerate(records)
-    ]
-
-    client.upsert(collection_name=collection_name, points=points)
+    written = 0
+    for i in range(0, len(records), batch_size):
+        batch_records = records[i: i + batch_size]
+        batch_embeddings = embeddings[i: i + batch_size]
+        points = [
+            PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r.id)),
+                vector=batch_embeddings[j],
+                payload={**r.to_chroma_metadata(), "document": r.embed_text},
+            )
+            for j, r in enumerate(batch_records)
+        ]
+        client.upsert(collection_name=collection_name, points=points)
+        written += len(batch_records)
+        print(f"  [{written}/{len(records)}] upserted", end="\r")
+    print()
     print(f"[embed] Stored {len(records)} vectors into '{collection_name}'")
     return len(records)
 

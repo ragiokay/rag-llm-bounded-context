@@ -44,7 +44,7 @@ def main():
                        help="List collections without deleting")
     args = parser.parse_args()
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = QdrantClient(url=QDRANT_URL, timeout=300)
     collections = list_collections(client)
 
     if args.list:
