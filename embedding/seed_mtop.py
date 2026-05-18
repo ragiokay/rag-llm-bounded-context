@@ -23,7 +23,8 @@ from sentence_transformers import SentenceTransformer
 from causal_transform import CausalRelationRecord
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = "mtop_commands"
+COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
+COLLECTION_NAME = f"{COLLECTION_PREFIX}mtop_commands"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 # Intent prefix → classification

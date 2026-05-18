@@ -19,7 +19,8 @@ from sentence_transformers import SentenceTransformer
 from causal_transform import CausalRelationRecord
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = "maven_ere_causal"
+COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
+COLLECTION_NAME = f"{COLLECTION_PREFIX}maven_ere_causal"
 MODEL_NAME = "all-MiniLM-L6-v2"
 RELATION_TYPES = {"CAUSE", "PRECONDITION"}
 

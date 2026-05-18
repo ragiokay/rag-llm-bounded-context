@@ -16,6 +16,7 @@ from causal_transform import transform_batch, CausalRelationRecord
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
 
 model = SentenceTransformer(MODEL_NAME)
 
@@ -125,7 +126,7 @@ def run():
         records, skipped = transform_batch(domain_rows)
         total_skipped += skipped
 
-        collection_name = f"bpc_{domain.replace(' ', '_').lower()}"
+        collection_name = f"{COLLECTION_PREFIX}bpc_{domain.replace(' ', '_').lower()}"
         written = embed_records(collection_name, records)
         total_written += written
         review_collection(collection_name)
