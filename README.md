@@ -1,146 +1,202 @@
-
 # RAG-LLM Bounded Context Extractor
 
 Automated Bounded Context creation through a Large Language Model (LLM) using Retrieval-Augmented Generation (RAG).
 
 ---
 
-## What This Project Does
+## Pipeline Overview
 
-This system takes a software use case description (in JSON format) and automatically identifies **Bounded Contexts** from it, using an LLM augmented with NLP reference datasets.
-
-### Pipeline Overview
 ```
-ChromaDB (vector DB)
-↓ Prompt Generator queries similar context
+Qdrant (vector DB, pre-seeded on server)
+↓ retrieve.py: query_similar / query_all
 Prompt Generator
-↓ Sends augmented prompts
-RAG-LLM
-↓ Identifies Bounded Contexts
-Bounded Context Module
-↓ Returns structured JSON output
-User
+↓ augmented prompts
+vLLM (Llama-3.2-1B-Instruct)
+↓
+Bounded Context output (JSON)
 ```
+
+---
+
+## For Teammates: How to Use the Retriever
+
+The retriever is already seeded and ready on the shared Qdrant server.
+Import `retrieve.py` directly — no local setup needed.
+
+### Environment Variables (set by Salvador in the shared container)
+
+| Variable | Value |
+|---|---|
+| `QDRANT_URL` | `http://140.112.90.146:6333` |
+| `COLLECTION_PREFIX` | `spring2026SE_g1_rag_` |
+
+### Import
+
+```python
+import sys
+sys.path.insert(0, "embedding")   # adjust path as needed
+from retrieve import query_similar, query_all
+```
+
+---
+
+### `query_similar(query_text, collection, n_results)`
+
+Search a single collection.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query_text` | `str` | required | Natural language query |
+| `collection` | `str` | `"maven_ere_causal"` | Collection name (with prefix) |
+| `n_results` | `int` | `3` | Number of results to return |
+
+```python
+results = query_similar(
+    "The storm caused severe flooding.",
+    collection="spring2026SE_g1_rag_maven_ere_causal",
+    n_results=3,
+)
+```
+
+---
+
+### `query_all(query_text, n_results_per_collection)`
+
+Search all collections at once, results sorted by similarity.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query_text` | `str` | required | Natural language query |
+| `n_results_per_collection` | `int` | `3` | Results per collection |
+
+```python
+results = query_all("The drought caused crop failure.", n_results_per_collection=2)
+```
+
+---
+
+### Return Format
+
+Both functions return a `list[dict]`. Each item:
+
+```json
+{
+  "input": "The sentence that was embedded (matched document)",
+  "distance": 0.43,
+  "collection": "spring2026SE_g1_rag_maven_ere_causal",
+  "output": {
+    "policy": "CAUSE: famine → deaths",
+    "domain_event": "Many civilian deaths were caused by famine due to war conditions.",
+    "command": "Many civilian deaths were caused by famine due to war conditions.",
+    "bounded_context": "World War II",
+    "aggregate": "Die",
+    "source_phrase": "Many civilian deaths were caused by famine due to war conditions.",
+    "trigger_span": null,
+    "views": null,
+    "user_roles": null,
+    "process": null
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `input` | The matched document text |
+| `distance` | Cosine distance (0 = identical, 1 = unrelated) — lower is better |
+| `collection` | Which collection the result came from |
+| `output.policy` | Causal/command relation label |
+| `output.domain_event` | Cause sentence or event description |
+| `output.command` | Effect sentence or command name |
+| `output.bounded_context` | Domain / source context |
+| `output.aggregate` | Aggregate or event type |
+| `output.source_phrase` | Original source text |
+| `output.trigger_span` | Imperative trigger phrase (MTOP only) |
+
+---
+
+## Available Collections (pre-seeded)
+
+All collections use prefix `spring2026SE_g1_rag_`.
+
+| Collection | Dataset | Vectors | Description |
+|---|---|---|---|
+| `bpc_education` | BPC | 327 | Business process causal reasoning — education |
+| `bpc_finance` | BPC | 391 | Finance |
+| `bpc_human_resources` | BPC | 381 | Human resources |
+| `bpc_insurance` | BPC | 272 | Insurance |
+| `bpc_logistics` | BPC | 296 | Logistics |
+| `bpc_manufacturing` | BPC | 364 | Manufacturing |
+| `bpc_medical` | BPC | 345 | Medical |
+| `bpc_retail` | BPC | 232 | Retail |
+| `bpc_transportation` | BPC | 469 | Transportation |
+| `maven_ere_causal` | MAVEN-ERE | 11,000+ | Event cause/precondition pairs |
+| `mtop_commands` | MTOP | 11,159 | Task-oriented command utterances |
+
 ---
 
 ## Project Structure
 
 ```
 rag-llm-bounded-context/
-├── embedding/              # Embedding Module
-│   ├── embed.py            # Downloads BPC from HuggingFace, embeds into ChromaDB
-│   ├── seed_maven_ere.py   # Loads MAVEN-ERE, embeds into ChromaDB
-│   ├── seed_mtop.py        # Loads MTOP, embeds into ChromaDB
-│   ├── retrieve.py         # Retrieval interface for Prompt Generator
-│   ├── causal_transform.py # BPC row → CausalRelationRecord (DDD schema)
-│   ├── reset_collections.py
+├── embedding/
+│   ├── retrieve.py          # Retrieval interface (query_similar, query_all)
+│   ├── embed.py             # BPC seeding script
+│   ├── seed_maven_ere.py    # MAVEN-ERE seeding script
+│   ├── seed_mtop.py         # MTOP seeding script
+│   ├── reset_collections.py # Maintenance: list / delete collections by prefix
+│   ├── causal_transform.py  # BPC row → CausalRelationRecord (DDD schema)
 │   └── requirements.txt
-├── tests/
-├── .gitignore
+├── tests/                   # 162 unit tests (all use in-memory Qdrant)
+├── Dockerfile
 └── README.md
 ```
----
-
-## Requirements
-
-- Python 3.11+
-- Git
 
 ---
 
-## Setup Instructions
+## Re-seeding (if needed)
 
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/ragiokay/rag-llm-bounded-context.git
-cd rag-llm-bounded-context
-```
-
-### 2. Install dependencies
+The datasets are already seeded. Only re-run if the server data is lost.
 
 ```bash
-pip install -r embedding/requirements.txt
-```
+# Set environment variables first
+export QDRANT_URL=http://140.112.90.146:6333
+export COLLECTION_PREFIX=spring2026SE_g1_rag_
 
-### 3. Build the vector database
-
-```bash
+# BPC (downloads from HuggingFace automatically)
 python embedding/embed.py
-```
 
-This downloads the BPC dataset from HuggingFace (3,077 rows), converts all records into vectors using `all-MiniLM-L6-v2`, and stores them in `vector_db/`. 9 collections are created, one per domain.
-
-Optionally, add the MAVEN-ERE and MTOP datasets:
-
-```bash
-# MAVEN-ERE (requires local data/maven_ere/train.jsonl, or falls back to HuggingFace mirror)
+# MAVEN-ERE (needs data/maven_ere/train.jsonl, or falls back to HuggingFace)
 python embedding/seed_maven_ere.py
 
-# MTOP (requires local data/mtop/en/train.txt — download from https://fb.me/mtop_dataset)
+# MTOP (needs data/mtop/en/train.txt — download from https://fb.me/mtop_dataset)
 python embedding/seed_mtop.py
 ```
 
-### 4. Test retrieval
+To inspect or clean up collections:
 
 ```bash
-python embedding/retrieve.py
+python embedding/reset_collections.py --list
+python embedding/reset_collections.py --prefix spring2026SE_g1_rag_
 ```
 
 ---
 
-## Datasets
+## Running Tests
 
-| Dataset   | Source                                                      | Rows  | Domain                           |
-|-----------|-------------------------------------------------------------|-------|----------------------------------|
-| BPC       | [ibm-research/BPC](https://huggingface.co/datasets/ibm-research/BPC) | 3,077 | Business Process Causal Reasoning |
-| MAVEN-ERE | [THU-KEG/MAVEN-ERE](https://github.com/THU-KEG/MAVEN-ERE)  | —     | Event Causal Relations           |
-| MTOP      | [fb.me/mtop_dataset](https://fb.me/mtop_dataset)           | —     | Task-Oriented Parsing (commands) |
+```bash
+pip install -r embedding/requirements.txt
+python -m pytest tests/ -q
+```
 
----
-
-## ChromaDB Collections
-
-After running `embed.py`, the following collections are available in `vector_db/`:
-
-| Collection             | Domain           | Vectors |
-|------------------------|------------------|---------|
-| bpc_education          | Education        | 327     |
-| bpc_finance            | Finance          | 391     |
-| bpc_human_resources    | Human Resources  | 381     |
-| bpc_insurance          | Insurance        | 272     |
-| bpc_logistics          | Logistics        | 296     |
-| bpc_manufacturing      | Manufacturing    | 364     |
-| bpc_medical            | Medical          | 345     |
-| bpc_retail             | Retail           | 232     |
-| bpc_transportation     | Transportation   | 469     |
-
-After running `seed_maven_ere.py`:
-
-| Collection        | Domain              |
-|-------------------|---------------------|
-| maven_ere_causal  | Event causal pairs  |
-
-After running `seed_mtop.py`:
-
-| Collection     | Domain                  |
-|----------------|-------------------------|
-| mtop_commands  | Task-oriented commands  |
-
----
-
-## Notes
-
-- `vector_db/` is not committed to Git. Generate it locally by running the seed scripts.
-- `data/` (raw dataset files) is not committed to Git.
+All tests use in-memory Qdrant — no server connection required.
 
 ---
 
 ## Requirements Traceability
 
-| Code | Requirement                       | Implemented In              |
-|------|-----------------------------------|-----------------------------|
-| BFR5 | Organize and clean datasets       | `embedding/embed.py`        |
-| BFR6 | Transfer datasets into vector space | `embedding/embed.py`      |
-| BFR7 | Review and clean vector space     | `embedding/embed.py`        |
-| IIR3 | Embedding Module ↔ Vector Database | `embedding/embed.py`       |
+| Code | Requirement | Implemented In |
+|---|---|---|
+| BFR5 | Organize and clean datasets | `embedding/embed.py`, `causal_transform.py` |
+| BFR6 | Transfer datasets into vector space | `embedding/embed.py`, `seed_maven_ere.py`, `seed_mtop.py` |
+| BFR7 | Review and clean vector space | `embedding/embed.py` (`review_collection`) |
+| IIR3 | Embedding Module ↔ Vector Database | `embedding/retrieve.py` |
