@@ -131,9 +131,13 @@ def query_all(
 if __name__ == "__main__":
     import json
 
+    prefix = os.getenv("COLLECTION_PREFIX", "")
+
     print("=== Retrieval Demo ===")
-    cols = list_collections()
-    print(f"Available collections: {cols}\n")
+    all_cols = list_collections()
+    cols = [c for c in all_cols if c.startswith(prefix)] if prefix else all_cols
+    print(f"All collections on server : {len(all_cols)}")
+    print(f"Our collections (prefix='{prefix}'): {cols}\n")
 
     if not cols:
         print("No collections found. Run embed.py (and optionally seed_maven_ere.py / seed_mtop.py) first.")
