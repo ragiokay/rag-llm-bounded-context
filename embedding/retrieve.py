@@ -124,69 +124,222 @@ def query_all(
     return all_results
 
 
+def query_multiple(
+    query_text: str,
+    collections: list[str],
+    n_results_per_collection: int = 3,
+) -> list[dict]:
+    """
+    Search a specific list of collections and return merged results sorted by distance.
+    Use this when you want to mix results from selected collections only.
+
+    Example:
+        query_multiple(
+            "User places an order",
+            collections=[
+                "spring2026SE_g1_rag_mtop_commands",
+                "spring2026SE_g1_rag_maven_ere_causal",
+            ],
+            n_results_per_collection=3,
+        )
+    """
+    if not query_text or not query_text.strip():
+        raise ValueError("query_text must not be empty")
+    if not collections:
+        raise ValueError("collections must not be empty")
+
+    all_results = []
+    for col_name in collections:
+        try:
+            all_results.extend(
+                query_similar(query_text, collection=col_name,
+                              n_results=n_results_per_collection)
+            )
+        except Exception:
+            continue
+
+    all_results.sort(key=lambda r: r["distance"])
+    return all_results
+
+
+def query_by_prefix(
+    query_text: str,
+    prefixes: list[str],
+    n_results_per_collection: int = 3,
+) -> list[dict]:
+    """
+    Search all collections whose names match any of the given prefixes.
+    The COLLECTION_PREFIX env var is automatically prepended to each prefix.
+
+    Example:
+        # Search all bpc_* collections
+        query_by_prefix("User places an order", prefixes=["bpc"])
+
+        # Search all bpc_* AND maven_ere_* collections
+        query_by_prefix("User places an order", prefixes=["bpc", "maven_ere"])
+    """
+    if not query_text or not query_text.strip():
+        raise ValueError("query_text must not be empty")
+    if not prefixes:
+        raise ValueError("prefixes must not be empty")
+
+    collection_prefix = os.getenv("COLLECTION_PREFIX", "")
+    full_prefixes = [f"{collection_prefix}{p}" for p in prefixes]
+
+    matched = [
+        col for col in list_collections()
+        if any(col.startswith(fp) for fp in full_prefixes)
+    ]
+
+    all_results = []
+    for col_name in matched:
+        try:
+            all_results.extend(
+                query_similar(query_text, collection=col_name,
+                              n_results=n_results_per_collection)
+            )
+        except Exception:
+            continue
+
+    all_results.sort(key=lambda r: r["distance"])
+    return all_results
+
+
 # ---------------------------------------------------------------------------
 # Demo — run directly to see live input/output
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import json
+    import datetime
+    import pathlib
 
     prefix = os.getenv("COLLECTION_PREFIX", "")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    reports_dir = pathlib.Path(__file__).parent.parent / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    md_path  = reports_dir / f"retrieve_demo_{timestamp}.md"
+    json_path = reports_dir / f"retrieve_demo_{timestamp}.json"
+
+    _md_lines: list[str] = []
+    _all_results: dict = {}
+
+    def _w(line: str = ""):
+        """Append a line to the markdown report buffer."""
+        _md_lines.append(line)
+
+    def _section(title: str):
+        print(f"  >> {title}")
+        _w(f"\n## {title}")
+
+    def _run_query(label: str, query_fn, *args, **kwargs) -> list[dict]:
+        results = query_fn(*args, **kwargs)
+        _all_results[label] = results
+
+        _w(f"\n**Query:** {kwargs.get('query_text') or args[0]}\n")
+        _w("| Rank | Distance | Collection | Input (truncated) | domain_event | command | policy | bounded_context |")
+        _w("|------|----------|------------|-------------------|--------------|---------|--------|-----------------|")
+        for rank, r in enumerate(results, 1):
+            o = r["output"]
+            inp = r["input"].replace("|", "/").replace("\n", " ")[:80]
+            de  = (o["domain_event"] or "").replace("|", "/")
+            cmd = (o["command"]      or "").replace("|", "/")
+            pol = (o["policy"]       or "").replace("|", "/")[:60]
+            bc  = (o["bounded_context"] or "").replace("|", "/")
+            _w(f"| {rank} | {r['distance']} | {r['collection']} | {inp} | {de} | {cmd} | {pol} | {bc} |")
+        return results
 
     print("=== Retrieval Demo ===")
     all_cols = list_collections()
-    cols = [c for c in all_cols if c.startswith(prefix)] if prefix else all_cols
-    print(f"All collections on server : {len(all_cols)}")
-    print(f"Our collections (prefix='{prefix}'): {cols}\n")
+    our_cols = set(c for c in all_cols if c.startswith(prefix)) if prefix else set(all_cols)
+    print(f"Collections found : {len(our_cols)}  {sorted(our_cols)}")
+    print(f"Writing report to : {md_path.name}")
+    print(f"Writing JSON to   : {json_path.name}\n")
 
-    if not cols:
-        print("No collections found. Run embed.py (and optionally seed_maven_ere.py / seed_mtop.py) first.")
+    if not our_cols:
+        print("No collections found. Run embed.py, seed_maven_ere.py, seed_mtop.py, seed_log.py first.")
         raise SystemExit(1)
 
-    # --- TEST 1: query_similar against the first available collection ---
-    print("=" * 60)
-    print(f"TEST 1: query_similar — {cols[0]}")
-    print("=" * 60)
-    q = "The storm caused severe flooding in the region."
-    print(f"Query: \"{q}\"\n")
-    for rank, r in enumerate(query_similar(q, collection=cols[0], n_results=3), 1):
-        print(f"  Rank {rank}  distance={r['distance']}")
-        print(f"    input  : {r['input'][:100]}")
-        print(f"    policy : {r['output']['policy']}")
-        print(f"    context: {r['output']['bounded_context']}")
-    print()
+    _w(f"# Retrieval Demo — {timestamp}")
+    _w(f"\nPrefix: `{prefix or '(none)'}` | Collections: {sorted(our_cols)}\n")
 
-    # --- TEST 2: query_similar — BPC if present, else second available collection ---
-    bpc_cols = [c for c in cols if c.startswith("bpc_")]
-    test2_col = bpc_cols[0] if bpc_cols else (cols[1] if len(cols) > 1 else cols[0])
-    print("=" * 60)
-    print(f"TEST 2: query_similar — {test2_col}")
-    print("=" * 60)
-    q = "Inventory shortages led to production delays."
-    print(f"Query: \"{q}\"\n")
-    for rank, r in enumerate(query_similar(q, collection=test2_col, n_results=3), 1):
-        print(f"  Rank {rank}  distance={r['distance']}")
-        print(f"    input  : {r['input'][:100]}")
-        print(f"    policy : {r['output']['policy']}")
-        print(f"    context: {r['output']['bounded_context']}")
-    print()
+    # --- DATASET 1: MAVEN-ERE ---
+    if f"{prefix}maven_ere_causal" in our_cols:
+        _section("DATASET 1: maven_ere_causal")
+        _run_query("maven_ere_causal", query_similar,
+                   "The storm caused severe flooding in the region.",
+                   collection=f"{prefix}maven_ere_causal", n_results=5)
+    else:
+        print("  [SKIP] maven_ere_causal")
+        _w("\n## DATASET 1: maven_ere_causal — SKIPPED (run seed_maven_ere.py)")
 
-    # --- TEST 3: query_all — cross-collection ---
-    print("=" * 60)
-    print("TEST 3: query_all — search all collections")
-    print("=" * 60)
-    q = "The drought caused crop failure and food shortages."
-    print(f"Query: \"{q}\"\n")
-    for rank, r in enumerate(query_all(q, n_results_per_collection=2), 1):
-        print(f"  Rank {rank}  distance={r['distance']}  collection={r['collection']}")
-        print(f"    input  : {r['input'][:100]}")
-        print(f"    policy : {r['output']['policy']}")
-    print()
+    # --- DATASET 2: BPC ---
+    bpc_cols = sorted(c for c in our_cols if c.startswith(f"{prefix}bpc_"))
+    if bpc_cols:
+        _section(f"DATASET 2: BPC — {bpc_cols[0]}")
+        _run_query("bpc_sample", query_similar,
+                   "Inventory shortages led to production delays.",
+                   collection=bpc_cols[0], n_results=5)
+        _w(f"\n> All BPC collections: {bpc_cols}")
+    else:
+        print("  [SKIP] bpc_*")
+        _w("\n## DATASET 2: BPC — SKIPPED (run embed.py)")
 
-    # --- TEST 4: full output shape (JSON) ---
-    print("=" * 60)
-    print("TEST 4: full output shape (JSON)")
-    print("=" * 60)
-    r = query_similar("Political crisis led to government collapse.",
-                      collection=cols[0], n_results=1)[0]
-    print(json.dumps(r, ensure_ascii=False, indent=2))
+    # --- DATASET 3: MTOP ---
+    if f"{prefix}mtop_commands" in our_cols:
+        _section("DATASET 3: mtop_commands")
+        _run_query("mtop_commands", query_similar,
+                   "Schedule a meeting with the team for tomorrow morning.",
+                   collection=f"{prefix}mtop_commands", n_results=5)
+    else:
+        print("  [SKIP] mtop_commands")
+        _w("\n## DATASET 3: mtop_commands — SKIPPED (run seed_mtop.py)")
+
+    # --- DATASET 4a: LOG domain events ---
+    if f"{prefix}log_domain_events" in our_cols:
+        _section("DATASET 4a: log_domain_events")
+        _run_query("log_domain_events", query_similar,
+                   "The user logs into the system and is authenticated.",
+                   collection=f"{prefix}log_domain_events", n_results=5)
+    else:
+        print("  [SKIP] log_domain_events")
+        _w("\n## DATASET 4a: log_domain_events — SKIPPED (run seed_log.py)")
+
+    # --- DATASET 4b: LOG commands ---
+    if f"{prefix}log_commands" in our_cols:
+        _section("DATASET 4b: log_commands")
+        _run_query("log_commands", query_similar,
+                   "The user starts a meeting and invites participants.",
+                   collection=f"{prefix}log_commands", n_results=5)
+    else:
+        print("  [SKIP] log_commands")
+        _w("\n## DATASET 4b: log_commands — SKIPPED (run seed_log.py)")
+
+    # --- CROSS-COLLECTION: query_all ---
+    _section("CROSS-COLLECTION: query_all")
+    _run_query("query_all", query_all,
+               "A user initiates an action and the system responds with a status change.",
+               n_results_per_collection=2)
+
+    # --- query_by_prefix: log only ---
+    _section("query_by_prefix: prefix=['log']")
+    _run_query("query_by_prefix_log", query_by_prefix,
+               "The meeting is cancelled by the initiator.",
+               prefixes=["log"], n_results_per_collection=3)
+
+    # --- query_multiple: mtop + log_commands ---
+    if f"{prefix}mtop_commands" in our_cols and f"{prefix}log_commands" in our_cols:
+        _section("query_multiple: mtop_commands + log_commands")
+        _run_query("query_multiple", query_multiple,
+                   "User cancels a scheduled meeting.",
+                   collections=[f"{prefix}mtop_commands", f"{prefix}log_commands"],
+                   n_results_per_collection=3)
+
+    # --- Write files ---
+    md_path.write_text("\n".join(_md_lines), encoding="utf-8")
+    json_path.write_text(json.dumps(_all_results, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"\nDone.")
+    print(f"  Report : {md_path}")
+    print(f"  JSON   : {json_path}")

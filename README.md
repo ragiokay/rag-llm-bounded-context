@@ -35,7 +35,7 @@ Import `retrieve.py` directly — no local setup needed.
 ```python
 import sys
 sys.path.insert(0, "embedding")   # adjust path as needed
-from retrieve import query_similar, query_all
+from retrieve import query_similar, query_all, query_multiple, query_by_prefix
 ```
 
 ---
@@ -71,6 +71,48 @@ Search all collections at once, results sorted by similarity.
 
 ```python
 results = query_all("The drought caused crop failure.", n_results_per_collection=2)
+```
+
+---
+
+### `query_multiple(query_text, collections, n_results_per_collection)`
+
+Search a specific list of collections and return merged results sorted by distance.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query_text` | `str` | required | Natural language query |
+| `collections` | `list[str]` | required | Exact collection names to search |
+| `n_results_per_collection` | `int` | `3` | Results per collection |
+
+```python
+results = query_multiple(
+    "User cancels a scheduled meeting.",
+    collections=["spring2026SE_g1_rag_mtop_commands",
+                 "spring2026SE_g1_rag_log_commands"],
+    n_results_per_collection=3,
+)
+```
+
+---
+
+### `query_by_prefix(query_text, prefixes, n_results_per_collection)`
+
+Search all collections whose names match any of the given prefixes.
+`COLLECTION_PREFIX` is automatically prepended to each prefix.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query_text` | `str` | required | Natural language query |
+| `prefixes` | `list[str]` | required | Collection name prefixes to match (without `COLLECTION_PREFIX`) |
+| `n_results_per_collection` | `int` | `3` | Results per collection |
+
+```python
+# Search all log_* collections (log_domain_events + log_commands)
+results = query_by_prefix("The meeting is cancelled.", prefixes=["log"])
+
+# Search both bpc_* and log_* collections
+results = query_by_prefix("User submits a form.", prefixes=["bpc", "log"])
 ```
 
 ---
@@ -129,8 +171,10 @@ All collections use prefix `spring2026SE_g1_rag_`.
 | `bpc_medical` | BPC | 345 | Medical |
 | `bpc_retail` | BPC | 232 | Retail |
 | `bpc_transportation` | BPC | 469 | Transportation |
-| `maven_ere_causal` | MAVEN-ERE | 11,000+ | Event cause/precondition pairs |
+| `maven_ere_causal` | MAVEN-ERE | 36,316 | Event cause/precondition pairs |
 | `mtop_commands` | MTOP | 11,159 | Task-oriented command utterances |
+| `log_domain_events` | DDD Log | 85 | Domain events extracted from DDD extraction tool log |
+| `log_commands` | DDD Log | 69 | Commands with actors extracted from DDD extraction tool log |
 
 ---
 
@@ -139,14 +183,20 @@ All collections use prefix `spring2026SE_g1_rag_`.
 ```
 rag-llm-bounded-context/
 ├── embedding/
-│   ├── retrieve.py          # Retrieval interface (query_similar, query_all)
+│   ├── retrieve.py          # Retrieval interface (query_similar / query_all / query_multiple / query_by_prefix)
 │   ├── embed.py             # BPC seeding script
 │   ├── seed_maven_ere.py    # MAVEN-ERE seeding script
 │   ├── seed_mtop.py         # MTOP seeding script
+│   ├── seed_log.py          # DDD Log seeding script (domain events + commands)
 │   ├── reset_collections.py # Maintenance: list / delete collections by prefix
 │   ├── causal_transform.py  # BPC row → CausalRelationRecord (DDD schema)
 │   └── requirements.txt
-├── tests/                   # 162 unit tests (all use in-memory Qdrant)
+├── tests/                   # 202 unit tests (all use in-memory Qdrant)
+│   ├── test_log.py          # Parser tests for seed_log.py
+│   └── test_retrieve_log.py # Retrieval tests for log collections
+├── reports/                 # Auto-generated demo output (retrieve.py __main__)
+│   ├── retrieve_demo_*.md   # Human-readable results table
+│   └── retrieve_demo_*.json # Raw JSON results by query
 ├── Dockerfile
 └── README.md
 ```
@@ -170,6 +220,9 @@ python embedding/seed_maven_ere.py
 
 # MTOP (needs data/mtop/en/train.txt — download from https://fb.me/mtop_dataset)
 python embedding/seed_mtop.py
+
+# DDD Log (needs data/log/*.log — produced by the automated DDD extraction tool)
+python embedding/seed_log.py
 ```
 
 To inspect or clean up collections:
@@ -190,6 +243,14 @@ python -m pytest tests/ -q
 
 All tests use in-memory Qdrant — no server connection required.
 
+To generate a full demo report across all collections (requires Qdrant running):
+
+```bash
+python embedding/retrieve.py
+# Writes reports/retrieve_demo_<timestamp>.md  (readable table)
+# Writes reports/retrieve_demo_<timestamp>.json (raw results)
+```
+
 ---
 
 ## Requirements Traceability
@@ -197,6 +258,6 @@ All tests use in-memory Qdrant — no server connection required.
 | Code | Requirement | Implemented In |
 |---|---|---|
 | BFR5 | Organize and clean datasets | `embedding/embed.py`, `causal_transform.py` |
-| BFR6 | Transfer datasets into vector space | `embedding/embed.py`, `seed_maven_ere.py`, `seed_mtop.py` |
+| BFR6 | Transfer datasets into vector space | `embedding/embed.py`, `seed_maven_ere.py`, `seed_mtop.py`, `seed_log.py` |
 | BFR7 | Review and clean vector space | `embedding/embed.py` (`review_collection`) |
 | IIR3 | Embedding Module ↔ Vector Database | `embedding/retrieve.py` |
