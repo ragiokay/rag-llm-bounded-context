@@ -124,6 +124,44 @@ def query_all(
     return all_results
 
 
+def query_multiple(
+    query_text: str,
+    collections: list[str],
+    n_results_per_collection: int = 3,
+) -> list[dict]:
+    """
+    Search a specific list of collections and return merged results sorted by distance.
+    Use this when you want to mix results from selected collections only.
+
+    Example:
+        query_multiple(
+            "User places an order",
+            collections=[
+                "spring2026SE_g1_rag_mtop_commands",
+                "spring2026SE_g1_rag_maven_ere_causal",
+            ],
+            n_results_per_collection=3,
+        )
+    """
+    if not query_text or not query_text.strip():
+        raise ValueError("query_text must not be empty")
+    if not collections:
+        raise ValueError("collections must not be empty")
+
+    all_results = []
+    for col_name in collections:
+        try:
+            all_results.extend(
+                query_similar(query_text, collection=col_name,
+                              n_results=n_results_per_collection)
+            )
+        except Exception:
+            continue
+
+    all_results.sort(key=lambda r: r["distance"])
+    return all_results
+
+
 # ---------------------------------------------------------------------------
 # Demo — run directly to see live input/output
 # ---------------------------------------------------------------------------
