@@ -162,6 +162,49 @@ def query_multiple(
     return all_results
 
 
+def query_by_prefix(
+    query_text: str,
+    prefixes: list[str],
+    n_results_per_collection: int = 3,
+) -> list[dict]:
+    """
+    Search all collections whose names match any of the given prefixes.
+    The COLLECTION_PREFIX env var is automatically prepended to each prefix.
+
+    Example:
+        # Search all bpc_* collections
+        query_by_prefix("User places an order", prefixes=["bpc"])
+
+        # Search all bpc_* AND maven_ere_* collections
+        query_by_prefix("User places an order", prefixes=["bpc", "maven_ere"])
+    """
+    if not query_text or not query_text.strip():
+        raise ValueError("query_text must not be empty")
+    if not prefixes:
+        raise ValueError("prefixes must not be empty")
+
+    collection_prefix = os.getenv("COLLECTION_PREFIX", "")
+    full_prefixes = [f"{collection_prefix}{p}" for p in prefixes]
+
+    matched = [
+        col for col in list_collections()
+        if any(col.startswith(fp) for fp in full_prefixes)
+    ]
+
+    all_results = []
+    for col_name in matched:
+        try:
+            all_results.extend(
+                query_similar(query_text, collection=col_name,
+                              n_results=n_results_per_collection)
+            )
+        except Exception:
+            continue
+
+    all_results.sort(key=lambda r: r["distance"])
+    return all_results
+
+
 # ---------------------------------------------------------------------------
 # Demo — run directly to see live input/output
 # ---------------------------------------------------------------------------
