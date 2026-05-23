@@ -225,9 +225,16 @@ __marimo__/
 *.csv
 data/maven_ere/*.jsonl
 data/maven_ere/*.json
+data/mtop/
+
+# Auto-generated demo reports
+reports/
 
 # Vector DB local files
 vector_db/
 
 # Claude Code working directory
 .claude/
+
+# External Datasets
+datasets/context-mapper-examples/

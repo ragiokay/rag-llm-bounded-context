@@ -100,7 +100,7 @@ def review_collection(collection_name: str) -> bool:
             print(f"[review] ERROR: NaN in embedding at index {i}")
             return False
 
-    print(f"[review] '{collection_name}' passed ✓")
+    print(f"[review] '{collection_name}' passed OK")
     return True
 
 

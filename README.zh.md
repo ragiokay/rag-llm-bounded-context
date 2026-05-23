@@ -34,7 +34,7 @@ Bounded Context 輸出（JSON）
 ```python
 import sys
 sys.path.insert(0, "embedding")   # 依實際路徑調整
-from retrieve import query_similar, query_all
+from retrieve import query_similar, query_all, query_multiple, query_by_prefix
 ```
 
 ---
@@ -70,6 +70,47 @@ results = query_similar(
 
 ```python
 results = query_all("乾旱導致糧食短缺。", n_results_per_collection=2)
+```
+
+---
+
+### `query_multiple(query_text, collections, n_results_per_collection)`
+
+查詢指定的 collection 清單，結果依距離排序合併回傳。
+
+| 參數 | 型別 | 預設值 | 說明 |
+|---|---|---|---|
+| `query_text` | `str` | 必填 | 自然語言查詢句 |
+| `collections` | `list[str]` | 必填 | 要查詢的完整 collection 名稱清單 |
+| `n_results_per_collection` | `int` | `3` | 每個 collection 回傳筆數 |
+
+```python
+results = query_multiple(
+    "使用者取消已排定的會議。",
+    collections=["spring2026SE_g1_rag_mtop_commands",
+                 "spring2026SE_g1_rag_log_commands"],
+    n_results_per_collection=3,
+)
+```
+
+---
+
+### `query_by_prefix(query_text, prefixes, n_results_per_collection)`
+
+搜尋所有名稱符合任一 prefix 的 collection，`COLLECTION_PREFIX` 環境變數會自動加在每個 prefix 前面。
+
+| 參數 | 型別 | 預設值 | 說明 |
+|---|---|---|---|
+| `query_text` | `str` | 必填 | 自然語言查詢句 |
+| `prefixes` | `list[str]` | 必填 | 要比對的 collection 名稱前綴（不含 `COLLECTION_PREFIX`） |
+| `n_results_per_collection` | `int` | `3` | 每個 collection 回傳筆數 |
+
+```python
+# 搜尋所有 log_* collection（log_domain_events + log_commands）
+results = query_by_prefix("會議被發起人取消。", prefixes=["log"])
+
+# 同時搜尋 bpc_* 和 log_* collection
+results = query_by_prefix("使用者送出表單。", prefixes=["bpc", "log"])
 ```
 
 ---
@@ -128,8 +169,10 @@ results = query_all("乾旱導致糧食短缺。", n_results_per_collection=2)
 | `bpc_medical` | BPC | 345 | 醫療 |
 | `bpc_retail` | BPC | 232 | 零售 |
 | `bpc_transportation` | BPC | 469 | 交通運輸 |
-| `maven_ere_causal` | MAVEN-ERE | 11,000+ | 事件因果/前提關係對 |
+| `maven_ere_causal` | MAVEN-ERE | 36,316 | 事件因果/前提關係對 |
 | `mtop_commands` | MTOP | 11,159 | 任務導向命令語句 |
+| `log_domain_events` | DDD Log | 85 | 從 DDD 自動提取工具 log 中萃取的 Domain Events |
+| `log_commands` | DDD Log | 69 | 從 DDD 自動提取工具 log 中萃取的 Commands（含 Actor） |
 
 ---
 
@@ -138,14 +181,20 @@ results = query_all("乾旱導致糧食短缺。", n_results_per_collection=2)
 ```
 rag-llm-bounded-context/
 ├── embedding/
-│   ├── retrieve.py          # 檢索介面（query_similar, query_all）
+│   ├── retrieve.py          # 檢索介面（query_similar / query_all / query_multiple / query_by_prefix）
 │   ├── embed.py             # BPC seed 腳本
 │   ├── seed_maven_ere.py    # MAVEN-ERE seed 腳本
 │   ├── seed_mtop.py         # MTOP seed 腳本
+│   ├── seed_log.py          # DDD Log seed 腳本（domain events + commands）
 │   ├── reset_collections.py # 維護工具：列出 / 刪除 collection
 │   ├── causal_transform.py  # BPC 資料列 → CausalRelationRecord（DDD schema）
 │   └── requirements.txt
-├── tests/                   # 162 個單元測試（使用 in-memory Qdrant）
+├── tests/                   # 202 個單元測試（使用 in-memory Qdrant）
+│   ├── test_log.py          # seed_log.py 的 parser 測試
+│   └── test_retrieve_log.py # log collection 的 retrieval 測試
+├── reports/                 # 自動產生的 demo 輸出（retrieve.py __main__）
+│   ├── retrieve_demo_*.md   # 可閱覽的結果表格
+│   └── retrieve_demo_*.json # 各 query 的完整 JSON 結果
 ├── Dockerfile
 └── README.md
 ```
@@ -169,6 +218,9 @@ python embedding/seed_maven_ere.py
 
 # MTOP（需要 data/mtop/en/train.txt，從 https://fb.me/mtop_dataset 下載）
 python embedding/seed_mtop.py
+
+# DDD Log（需要 data/log/*.log — 由 DDD 自動提取工具產生）
+python embedding/seed_log.py
 ```
 
 查看或清除 collection：
@@ -189,6 +241,14 @@ python -m pytest tests/ -q
 
 所有測試使用 in-memory Qdrant，不需要連線到 server。
 
+產生完整 demo 報告（需要 Qdrant 運行中）：
+
+```bash
+python embedding/retrieve.py
+# 輸出 reports/retrieve_demo_<timestamp>.md  （可閱覽的結果表格）
+# 輸出 reports/retrieve_demo_<timestamp>.json（各 query 完整 JSON 結果）
+```
+
 ---
 
 ## 需求追蹤
@@ -196,6 +256,6 @@ python -m pytest tests/ -q
 | 代碼 | 需求 | 實作位置 |
 |---|---|---|
 | BFR5 | 整理與清理資料集 | `embedding/embed.py`, `causal_transform.py` |
-| BFR6 | 將資料集轉入向量空間 | `embedding/embed.py`, `seed_maven_ere.py`, `seed_mtop.py` |
+| BFR6 | 將資料集轉入向量空間 | `embedding/embed.py`, `seed_maven_ere.py`, `seed_mtop.py`, `seed_log.py` |
 | BFR7 | 審查與清理向量空間 | `embedding/embed.py`（`review_collection`） |
 | IIR3 | Embedding Module ↔ 向量資料庫 | `embedding/retrieve.py` |
