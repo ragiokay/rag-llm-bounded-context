@@ -58,25 +58,12 @@ def _build_result(distance: float, document: str, metadata: dict, collection: st
     }
 
 
-def query_similar(
-    query_text: str,
-    collection: str = "maven_ere_causal",
-    n_results: int = 3,
-) -> list[dict]:
-    """
-    Embed query_text and return n_results most similar records from one collection.
-    Raises ValueError for empty/whitespace-only query.
-    Raises exception if collection does not exist.
-    """
-    if not query_text or not query_text.strip():
-        raise ValueError("query_text must not be empty")
-
+def _query_raw(query_text: str, collection: str, n_results: int) -> list[dict]:
+    """Internal: query by exact full collection name, no prefix handling."""
     embedding = _get_model().encode([query_text], show_progress_bar=False).tolist()[0]
     client = _get_client()
 
-    col_info = client.get_collection(collection)
-    col_size = col_info.points_count
-
+    col_size = client.get_collection(collection).points_count
     safe_n = min(n_results, col_size)
     if safe_n == 0:
         return []
@@ -87,7 +74,6 @@ def query_similar(
         limit=safe_n,
         with_payload=True,
     )
-
     return [
         _build_result(
             round(1 - result.score, 4),
@@ -99,12 +85,31 @@ def query_similar(
     ]
 
 
-def query_all(
+def query_similar(
     query_text: str,
-    n_results_per_collection: int = 3,
+    collection: str = "maven_ere_causal",
+    n_results: int = 3,
 ) -> list[dict]:
     """
-    Search all available collections and return merged results sorted by distance.
+    Embed query_text and return n_results most similar records from one collection.
+    COLLECTION_PREFIX env var is automatically prepended to collection.
+    Raises ValueError for empty/whitespace-only query.
+    Raises exception if collection does not exist.
+    """
+    if not query_text or not query_text.strip():
+        raise ValueError("query_text must not be empty")
+
+    prefix = os.getenv("COLLECTION_PREFIX", "")
+    return _query_raw(query_text, f"{prefix}{collection}", n_results)
+
+
+def query_all(
+    query_text: str,
+    n_results: int = 3,
+) -> list[dict]:
+    """
+    Search all available collections and return the top n_results most similar
+    results across all collections.
     Useful when the Prompt Generator does not know which collection to target.
     """
     if not query_text or not query_text.strip():
@@ -114,33 +119,30 @@ def query_all(
     for col_name in list_collections():
         try:
             all_results.extend(
-                query_similar(query_text, collection=col_name,
-                              n_results=n_results_per_collection)
+                _query_raw(query_text, col_name, n_results)
             )
         except Exception:
             continue
 
     all_results.sort(key=lambda r: r["distance"])
-    return all_results
+    return all_results[:n_results]
 
 
 def query_multiple(
     query_text: str,
     collections: list[str],
-    n_results_per_collection: int = 3,
+    n_results: int = 3,
 ) -> list[dict]:
     """
-    Search a specific list of collections and return merged results sorted by distance.
-    Use this when you want to mix results from selected collections only.
+    Search a specific list of collections and return the top n_results most similar
+    results across all specified collections.
+    COLLECTION_PREFIX env var is automatically prepended to each collection name.
 
     Example:
         query_multiple(
             "User places an order",
-            collections=[
-                "spring2026SE_g1_rag_mtop_commands",
-                "spring2026SE_g1_rag_maven_ere_causal",
-            ],
-            n_results_per_collection=3,
+            collections=["mtop_commands", "log_commands"],
+            n_results=3,
         )
     """
     if not query_text or not query_text.strip():
@@ -148,34 +150,35 @@ def query_multiple(
     if not collections:
         raise ValueError("collections must not be empty")
 
+    prefix = os.getenv("COLLECTION_PREFIX", "")
     all_results = []
     for col_name in collections:
         try:
             all_results.extend(
-                query_similar(query_text, collection=col_name,
-                              n_results=n_results_per_collection)
+                _query_raw(query_text, f"{prefix}{col_name}", n_results)
             )
         except Exception:
             continue
 
     all_results.sort(key=lambda r: r["distance"])
-    return all_results
+    return all_results[:n_results]
 
 
 def query_by_prefix(
     query_text: str,
     prefixes: list[str],
-    n_results_per_collection: int = 3,
+    n_results: int = 3,
 ) -> list[dict]:
     """
     Search all collections whose names match any of the given prefixes.
+    Returns the top n_results most similar results across all matched collections.
     The COLLECTION_PREFIX env var is automatically prepended to each prefix.
 
     Example:
-        # Search all bpc_* collections
+        # Search all bpc_* collections, return top 3 overall
         query_by_prefix("User places an order", prefixes=["bpc"])
 
-        # Search all bpc_* AND maven_ere_* collections
+        # Search both bpc_* and maven_ere_* collections
         query_by_prefix("User places an order", prefixes=["bpc", "maven_ere"])
     """
     if not query_text or not query_text.strip():
@@ -195,14 +198,13 @@ def query_by_prefix(
     for col_name in matched:
         try:
             all_results.extend(
-                query_similar(query_text, collection=col_name,
-                              n_results=n_results_per_collection)
+                _query_raw(query_text, col_name, n_results)
             )
         except Exception:
             continue
 
     all_results.sort(key=lambda r: r["distance"])
-    return all_results
+    return all_results[:n_results]
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +271,7 @@ if __name__ == "__main__":
         _section("DATASET 1: maven_ere_causal")
         _run_query("maven_ere_causal", query_similar,
                    "The storm caused severe flooding in the region.",
-                   collection=f"{prefix}maven_ere_causal", n_results=5)
+                   collection="maven_ere_causal", n_results=5)
     else:
         print("  [SKIP] maven_ere_causal")
         _w("\n## DATASET 1: maven_ere_causal — SKIPPED (run seed_maven_ere.py)")
@@ -280,7 +282,7 @@ if __name__ == "__main__":
         _section(f"DATASET 2: BPC — {bpc_cols[0]}")
         _run_query("bpc_sample", query_similar,
                    "Inventory shortages led to production delays.",
-                   collection=bpc_cols[0], n_results=5)
+                   collection="bpc_education", n_results=5)
         _w(f"\n> All BPC collections: {bpc_cols}")
     else:
         print("  [SKIP] bpc_*")
@@ -291,7 +293,7 @@ if __name__ == "__main__":
         _section("DATASET 3: mtop_commands")
         _run_query("mtop_commands", query_similar,
                    "Schedule a meeting with the team for tomorrow morning.",
-                   collection=f"{prefix}mtop_commands", n_results=5)
+                   collection="mtop_commands", n_results=5)
     else:
         print("  [SKIP] mtop_commands")
         _w("\n## DATASET 3: mtop_commands — SKIPPED (run seed_mtop.py)")
@@ -301,7 +303,7 @@ if __name__ == "__main__":
         _section("DATASET 4a: log_domain_events")
         _run_query("log_domain_events", query_similar,
                    "The user logs into the system and is authenticated.",
-                   collection=f"{prefix}log_domain_events", n_results=5)
+                   collection="log_domain_events", n_results=5)
     else:
         print("  [SKIP] log_domain_events")
         _w("\n## DATASET 4a: log_domain_events — SKIPPED (run seed_log.py)")
@@ -311,7 +313,7 @@ if __name__ == "__main__":
         _section("DATASET 4b: log_commands")
         _run_query("log_commands", query_similar,
                    "The user starts a meeting and invites participants.",
-                   collection=f"{prefix}log_commands", n_results=5)
+                   collection="log_commands", n_results=5)
     else:
         print("  [SKIP] log_commands")
         _w("\n## DATASET 4b: log_commands — SKIPPED (run seed_log.py)")
@@ -320,21 +322,21 @@ if __name__ == "__main__":
     _section("CROSS-COLLECTION: query_all")
     _run_query("query_all", query_all,
                "A user initiates an action and the system responds with a status change.",
-               n_results_per_collection=2)
+               n_results=2)
 
     # --- query_by_prefix: log only ---
     _section("query_by_prefix: prefix=['log']")
     _run_query("query_by_prefix_log", query_by_prefix,
                "The meeting is cancelled by the initiator.",
-               prefixes=["log"], n_results_per_collection=3)
+               prefixes=["log"], n_results=3)
 
     # --- query_multiple: mtop + log_commands ---
     if f"{prefix}mtop_commands" in our_cols and f"{prefix}log_commands" in our_cols:
         _section("query_multiple: mtop_commands + log_commands")
         _run_query("query_multiple", query_multiple,
                    "User cancels a scheduled meeting.",
-                   collections=[f"{prefix}mtop_commands", f"{prefix}log_commands"],
-                   n_results_per_collection=3)
+                   collections=["mtop_commands", "log_commands"],
+                   n_results=3)
 
     # --- Write files ---
     md_path.write_text("\n".join(_md_lines), encoding="utf-8")
