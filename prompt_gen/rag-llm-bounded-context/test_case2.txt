@@ -1,0 +1,2 @@
+VIP customers get a 10% discount if their order exceeds $200. 
+When the customer submits the cart, the system calculates the discount and generates the final invoice.
