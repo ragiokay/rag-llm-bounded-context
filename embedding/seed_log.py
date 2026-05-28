@@ -1,8 +1,9 @@
 # DDD Elements Log Loader
 # Parses the debug log produced by the automated DDD extraction tool.
-# Extracts two directly-mapped record types (no inference):
+# Extracts three directly-mapped record types (no inference):
 #   1. Domain Events  (Step 2 table) -> log_domain_events collection
 #   2. Commands with Actors (Step 4 table) -> log_commands collection
+#   3. Command-Event Pairs (Step 3 block) -> log_commands_events_pairs collection
 #
 # Example domain event record:
 #   embed_text   : "The system verifies the user ."
@@ -12,6 +13,12 @@
 #   embed_text   : "The user clicks INITIATE_MEETING button ."
 #   command      : "initiate meeting"
 #   user_roles   : "initiator"
+#
+# Example command-event pair record:
+#   embed_text            : "The user clicks INITIATE_MEETING ... The initiated meeting is scheduled ."
+#   domain_event          : "meeting scheduled"
+#   command               : "initiate meeting"
+#   commands_events_pairs : [["initiate meeting", "meeting scheduled"]]
 
 import os
 import re
@@ -27,6 +34,7 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
 COLLECTION_DOMAIN_EVENTS = f"{COLLECTION_PREFIX}log_domain_events"
 COLLECTION_COMMANDS = f"{COLLECTION_PREFIX}log_commands"
+COLLECTION_PAIRS = f"{COLLECTION_PREFIX}log_commands_events_pairs"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 # Matches the leading log prefix on timestamped lines, e.g.:
@@ -142,8 +150,58 @@ def parse_commands(log_text: str) -> list[dict]:
     return records
 
 
+_PAIR_RE = re.compile(r'Event-Command found:\s*"([^"]+)"\s*->\s*"([^"]+)"')
+_SENTENCE_RE = re.compile(r'sentence:\s*(.+)')
+
+
+def parse_command_event_pairs(log_text: str) -> list[dict]:
+    """
+    Parse Step 3 Event-Command pairs.
+    Format (per pair, 3 lines):
+        [timestamp][DEBUG] Event-Command found: "event"->"command"
+                           sentence: <compound sentence>
+                           Causal prediction confidence: <float>
+    Returns list of payload dicts ready for Qdrant.
+    commands_events_pairs stores [[command, event]] as list-of-list.
+    """
+    section = _section_between(
+        log_text,
+        "[Strategic Design - Step3]: Pair Commands with Events.",
+        "[Strategic Design - Step4]: Assign Actors For Commands",
+    )
+    if not section:
+        return []
+
+    records = []
+    lines = section.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = _strip_prefix(lines[i])
+        m = _PAIR_RE.search(stripped)
+        if m:
+            event = m.group(1).strip()
+            command = m.group(2).strip()
+            if i + 1 < len(lines):
+                next_stripped = _strip_prefix(lines[i + 1])
+                sm = _SENTENCE_RE.match(next_stripped)
+                if sm:
+                    sentence = sm.group(1).strip()
+                    if event and command and sentence:
+                        records.append({
+                            "domain_event": event,
+                            "command": command,
+                            "commands_events_pairs": [[command, event]],
+                            "source_phrase": sentence,
+                            "document": sentence,
+                        })
+                    i += 2
+                    continue
+        i += 1
+    return records
+
+
 def _make_id(prefix: str, payload: dict) -> str:
-    key = f"{prefix}|{payload.get('domain_event') or payload.get('command', '')}|{payload.get('document', '')[:80]}"
+    key = f"{prefix}|{payload.get('domain_event', '')}|{payload.get('command', '')}|{payload.get('document', '')[:80]}"
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
 
 
@@ -210,6 +268,7 @@ def run(log_path: str | None = None):
 
     all_events: list[dict] = []
     all_commands: list[dict] = []
+    all_pairs: list[dict] = []
 
     for fpath in log_files:
         print(f"Reading {fpath} ...")
@@ -217,12 +276,15 @@ def run(log_path: str | None = None):
             text = f.read()
         events = parse_domain_events(text)
         cmds = parse_commands(text)
-        print(f"  domain events: {len(events)}, commands: {len(cmds)}")
+        pairs = parse_command_event_pairs(text)
+        print(f"  domain events: {len(events)}, commands: {len(cmds)}, pairs: {len(pairs)}")
         all_events.extend(events)
         all_commands.extend(cmds)
+        all_pairs.extend(pairs)
 
     print(f"\nTotal domain events : {len(all_events)}")
     print(f"Total commands      : {len(all_commands)}")
+    print(f"Total pairs         : {len(all_pairs)}")
 
     if all_events:
         print(f"\nExample domain event:")
@@ -237,6 +299,14 @@ def run(log_path: str | None = None):
         print(f"  user_roles   : {ex.get('user_roles', '(none)')}")
         print(f"  embed_text   : {ex['document']}")
 
+    if all_pairs:
+        print(f"\nExample pair:")
+        ex = all_pairs[0]
+        print(f"  domain_event          : {ex['domain_event']}")
+        print(f"  command               : {ex['command']}")
+        print(f"  commands_events_pairs : {ex['commands_events_pairs']}")
+        print(f"  embed_text            : {ex['document']}")
+
     model = SentenceTransformer(MODEL_NAME)
     print(f"\nEmbedding with {MODEL_NAME}...")
 
@@ -246,10 +316,14 @@ def run(log_path: str | None = None):
     written_cmds = embed_and_store(
         all_commands, "document", COLLECTION_COMMANDS, model, "log_cmd"
     )
+    written_pairs = embed_and_store(
+        all_pairs, "document", COLLECTION_PAIRS, model, "log_pair"
+    )
 
     print(f"\n=== Done ===")
     print(f"  {written_events} vectors -> '{COLLECTION_DOMAIN_EVENTS}'")
     print(f"  {written_cmds} vectors -> '{COLLECTION_COMMANDS}'")
+    print(f"  {written_pairs} vectors -> '{COLLECTION_PAIRS}'")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,8 @@ _model = None
 _client = None
 
 OUTPUT_FIELDS = ["policy", "domain_event", "command", "bounded_context",
-                 "aggregate", "source_phrase", "trigger_span", "views", "user_roles", "process"]
+                 "aggregate", "source_phrase", "trigger_span", "views", "user_roles", "process",
+                 "commands_events_pairs"]
 
 
 def _get_model() -> SentenceTransformer:
@@ -167,15 +168,14 @@ def query_multiple(
 def query_by_prefix(
     query_text: str,
     prefixes: list[str],
-    n_results: int = 3,
+    n_results_per_collection: int = 3,
 ) -> list[dict]:
     """
     Search all collections whose names match any of the given prefixes.
-    Returns the top n_results most similar results across all matched collections.
-    The COLLECTION_PREFIX env var is automatically prepended to each prefix.
+    COLLECTION_PREFIX env var is automatically prepended to each prefix.
 
     Example:
-        # Search all bpc_* collections, return top 3 overall
+        # Search all bpc_* collections
         query_by_prefix("User places an order", prefixes=["bpc"])
 
         # Search both bpc_* and maven_ere_* collections
@@ -198,13 +198,13 @@ def query_by_prefix(
     for col_name in matched:
         try:
             all_results.extend(
-                _query_raw(query_text, col_name, n_results)
+                _query_raw(query_text, col_name, n_results_per_collection)
             )
         except Exception:
             continue
 
     all_results.sort(key=lambda r: r["distance"])
-    return all_results[:n_results]
+    return all_results
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +269,9 @@ if __name__ == "__main__":
     # --- DATASET 1: MAVEN-ERE ---
     if f"{prefix}maven_ere_causal" in our_cols:
         _section("DATASET 1: maven_ere_causal")
-        _run_query("maven_ere_causal", query_similar,
+        _run_query("maven_ere_causal", query_by_prefix,
                    "The storm caused severe flooding in the region.",
-                   collection="maven_ere_causal", n_results=5)
+                   prefixes=["maven_ere"], n_results_per_collection=5)
     else:
         print("  [SKIP] maven_ere_causal")
         _w("\n## DATASET 1: maven_ere_causal — SKIPPED (run seed_maven_ere.py)")
@@ -279,10 +279,10 @@ if __name__ == "__main__":
     # --- DATASET 2: BPC ---
     bpc_cols = sorted(c for c in our_cols if c.startswith(f"{prefix}bpc_"))
     if bpc_cols:
-        _section(f"DATASET 2: BPC — {bpc_cols[0]}")
-        _run_query("bpc_sample", query_similar,
+        _section("DATASET 2: BPC (all domains)")
+        _run_query("bpc_sample", query_by_prefix,
                    "Inventory shortages led to production delays.",
-                   collection="bpc_education", n_results=5)
+                   prefixes=["bpc"], n_results_per_collection=2)
         _w(f"\n> All BPC collections: {bpc_cols}")
     else:
         print("  [SKIP] bpc_*")
@@ -291,9 +291,9 @@ if __name__ == "__main__":
     # --- DATASET 3: MTOP ---
     if f"{prefix}mtop_commands" in our_cols:
         _section("DATASET 3: mtop_commands")
-        _run_query("mtop_commands", query_similar,
+        _run_query("mtop_commands", query_by_prefix,
                    "Schedule a meeting with the team for tomorrow morning.",
-                   collection="mtop_commands", n_results=5)
+                   prefixes=["mtop"], n_results_per_collection=5)
     else:
         print("  [SKIP] mtop_commands")
         _w("\n## DATASET 3: mtop_commands — SKIPPED (run seed_mtop.py)")
@@ -301,9 +301,9 @@ if __name__ == "__main__":
     # --- DATASET 4a: LOG domain events ---
     if f"{prefix}log_domain_events" in our_cols:
         _section("DATASET 4a: log_domain_events")
-        _run_query("log_domain_events", query_similar,
+        _run_query("log_domain_events", query_by_prefix,
                    "The user logs into the system and is authenticated.",
-                   collection="log_domain_events", n_results=5)
+                   prefixes=["log_domain_events"], n_results_per_collection=5)
     else:
         print("  [SKIP] log_domain_events")
         _w("\n## DATASET 4a: log_domain_events — SKIPPED (run seed_log.py)")
@@ -311,12 +311,22 @@ if __name__ == "__main__":
     # --- DATASET 4b: LOG commands ---
     if f"{prefix}log_commands" in our_cols:
         _section("DATASET 4b: log_commands")
-        _run_query("log_commands", query_similar,
+        _run_query("log_commands", query_by_prefix,
                    "The user starts a meeting and invites participants.",
-                   collection="log_commands", n_results=5)
+                   prefixes=["log_commands"], n_results_per_collection=5)
     else:
         print("  [SKIP] log_commands")
         _w("\n## DATASET 4b: log_commands — SKIPPED (run seed_log.py)")
+
+    # --- DATASET 4c: LOG command-event pairs ---
+    if f"{prefix}log_commands_events_pairs" in our_cols:
+        _section("DATASET 4c: log_commands_events_pairs")
+        _run_query("log_commands_events_pairs", query_by_prefix,
+                   "The user initiates a meeting and it gets scheduled.",
+                   prefixes=["log_commands_events_pairs"], n_results_per_collection=5)
+    else:
+        print("  [SKIP] log_commands_events_pairs")
+        _w("\n## DATASET 4c: log_commands_events_pairs — SKIPPED (run seed_log.py)")
 
     # --- CROSS-COLLECTION: query_all ---
     _section("CROSS-COLLECTION: query_all")
@@ -328,7 +338,7 @@ if __name__ == "__main__":
     _section("query_by_prefix: prefix=['log']")
     _run_query("query_by_prefix_log", query_by_prefix,
                "The meeting is cancelled by the initiator.",
-               prefixes=["log"], n_results=3)
+               prefixes=["log"], n_results_per_collection=3)
 
     # --- query_multiple: mtop + log_commands ---
     if f"{prefix}mtop_commands" in our_cols and f"{prefix}log_commands" in our_cols:

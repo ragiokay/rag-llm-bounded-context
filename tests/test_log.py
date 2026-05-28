@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from embedding.seed_log import parse_domain_events, parse_commands
+from embedding.seed_log import parse_domain_events, parse_commands, parse_command_event_pairs
 
 # Minimal realistic log snippets copied from the actual log format
 _DOMAIN_EVENTS_FIXTURE = """
@@ -129,3 +129,73 @@ class TestParseCommands:
 
     def test_empty_log_returns_empty(self):
         assert parse_commands("") == []
+
+
+_PAIRS_FIXTURE = """
+[2026-05-12 00:05:12]-----------------------------------------------------------
+[2026-05-12 00:05:12] [Strategic Design - Step3]: Pair Commands with Events.
+[2026-05-12 00:05:12]-----------------------------------------------------------
+[2026-05-12 00:05:14][DEBUG] Event-Command found: "user verified"->"login"
+                      sentence: The User enters the user's username and password and presses the " LOGIN " button . The system verifies the user .
+                      Causal prediction confidence: 0.9952837824821472
+[2026-05-12 00:05:16][DEBUG] Event-Command found: "meeting initiated"->"initiate meeting"
+                      sentence: The user clicks " INITIATE_MEETING " button . The system sends a request to the backend to initiate a meeting .
+                      Causal prediction confidence: 0.9998838901519775
+[2026-05-12 00:05:21][DEBUG] Event-Command found: "meeting scheduled"->"establish agenda"
+                      sentence: The user establishes the meeting 's agendas . The initiated meeting is scheduled and the system sends new meeting messages to all participants .
+                      Causal prediction confidence: 0.9962913990020752
+[2026-05-12 00:05:47]-----------------------------------------------------------
+[2026-05-12 00:05:47] [Strategic Design - Step4]: Assign Actors For Commands
+[2026-05-12 00:05:47]-----------------------------------------------------------
+"""
+
+
+class TestParseCommandEventPairs:
+    def test_count(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        assert len(records) == 3
+
+    def test_fields_present(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        for r in records:
+            assert "domain_event" in r
+            assert "command" in r
+            assert "document" in r
+            assert "source_phrase" in r
+            assert "commands_events_pairs" in r
+
+    def test_event_and_command_parsed(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        login = next(r for r in records if r["command"] == "login")
+        assert login["domain_event"] == "user verified"
+
+    def test_commands_events_pairs_is_list_of_list(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        for r in records:
+            assert isinstance(r["commands_events_pairs"], list)
+            assert isinstance(r["commands_events_pairs"][0], list)
+            assert len(r["commands_events_pairs"][0]) == 2
+
+    def test_pairs_order_is_command_then_event(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        login = next(r for r in records if r["command"] == "login")
+        assert login["commands_events_pairs"] == [["login", "user verified"]]
+
+    def test_document_is_compound_sentence(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        login = next(r for r in records if r["command"] == "login")
+        assert "LOGIN" in login["document"]
+        assert "verifies" in login["document"]
+
+    def test_no_empty_document(self):
+        records = parse_command_event_pairs(_PAIRS_FIXTURE)
+        assert all(r["document"].strip() for r in records)
+
+    def test_empty_log_returns_empty(self):
+        assert parse_command_event_pairs("") == []
+
+    def test_missing_step3_marker_returns_empty(self):
+        text = _PAIRS_FIXTURE.replace(
+            "[Strategic Design - Step3]: Pair Commands with Events.", ""
+        )
+        assert parse_command_event_pairs(text) == []
