@@ -328,6 +328,16 @@ if __name__ == "__main__":
         print("  [SKIP] log_commands_events_pairs")
         _w("\n## DATASET 4c: log_commands_events_pairs — SKIPPED (run seed_log.py)")
 
+    # --- DATASET 4d: LOG policy ---
+    if f"{prefix}log_policy" in our_cols:
+        _section("DATASET 4d: log_policy")
+        _run_query("log_policy", query_by_prefix,
+                   "The administrator manages user permissions and access levels.",
+                   prefixes=["log_policy"], n_results_per_collection=5)
+    else:
+        print("  [SKIP] log_policy")
+        _w("\n## DATASET 4d: log_policy — SKIPPED (run seed_log.py)")
+
     # --- CROSS-COLLECTION: query_all ---
     _section("CROSS-COLLECTION: query_all")
     _run_query("query_all", query_all,
