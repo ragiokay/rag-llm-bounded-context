@@ -1,9 +1,10 @@
 # DDD Elements Log Loader
 # Parses the debug log produced by the automated DDD extraction tool.
-# Extracts three directly-mapped record types (no inference):
+# Extracts four directly-mapped record types (no inference):
 #   1. Domain Events  (Step 2 table) -> log_domain_events collection
 #   2. Commands with Actors (Step 4 table) -> log_commands collection
 #   3. Command-Event Pairs (Step 3 block) -> log_commands_events_pairs collection
+#   4. Policies (Step 5 block) -> log_policy collection
 #
 # Example domain event record:
 #   embed_text   : "The system verifies the user ."
@@ -19,6 +20,10 @@
 #   domain_event          : "meeting scheduled"
 #   command               : "initiate meeting"
 #   commands_events_pairs : [["initiate meeting", "meeting scheduled"]]
+#
+# Example policy record:
+#   embed_text : "The administrator is logged in. The user can add, edit or delete the user levels."
+#   policy     : '"administrator logged in"->"delete user level"'
 
 import os
 import re
@@ -35,6 +40,7 @@ COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
 COLLECTION_DOMAIN_EVENTS = f"{COLLECTION_PREFIX}log_domain_events"
 COLLECTION_COMMANDS = f"{COLLECTION_PREFIX}log_commands"
 COLLECTION_PAIRS = f"{COLLECTION_PREFIX}log_commands_events_pairs"
+COLLECTION_POLICY = f"{COLLECTION_PREFIX}log_policy"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
 # Matches the leading log prefix on timestamped lines, e.g.:
@@ -151,6 +157,7 @@ def parse_commands(log_text: str) -> list[dict]:
 
 
 _PAIR_RE = re.compile(r'Event-Command found:\s*"([^"]+)"\s*->\s*"([^"]+)"')
+_POLICY_RE = re.compile(r'\(Policy\)Event-Command found:\s*(.+)')
 _SENTENCE_RE = re.compile(r'sentence:\s*(.+)')
 
 
@@ -192,6 +199,47 @@ def parse_command_event_pairs(log_text: str) -> list[dict]:
                             "command": command,
                             "commands_events_pairs": [[command, event]],
                             "source_phrase": sentence,
+                            "document": sentence,
+                        })
+                    i += 2
+                    continue
+        i += 1
+    return records
+
+
+def parse_policies(log_text: str) -> list[dict]:
+    """
+    Parse Step 5 Policy entries.
+    Format (per entry, 3 lines):
+        [timestamp][DEBUG] (Policy)Event-Command found: "event"->"command"
+                           sentence: <compound sentence>
+                           Causal prediction confidence: <float>
+    Returns list of payload dicts with only 'policy' and 'document' fields.
+    """
+    section = _section_between(
+        log_text,
+        "[Strategic Design - Step5]: Create Policies Between Events And Commands",
+        "[Strategic Design - Step6]",
+    )
+    if not section:
+        return []
+
+    records = []
+    lines = section.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = _strip_prefix(lines[i])
+        m = _POLICY_RE.search(stripped)
+        if m:
+            policy = m.group(1).strip()
+            if i + 1 < len(lines):
+                next_stripped = _strip_prefix(lines[i + 1])
+                sm = _SENTENCE_RE.match(next_stripped)
+                if sm:
+                    sentence = sm.group(1).strip()
+                    if policy and sentence:
+                        records.append({
+                            "policy": policy,
                             "document": sentence,
                         })
                     i += 2
@@ -269,6 +317,7 @@ def run(log_path: str | None = None):
     all_events: list[dict] = []
     all_commands: list[dict] = []
     all_pairs: list[dict] = []
+    all_policies: list[dict] = []
 
     for fpath in log_files:
         print(f"Reading {fpath} ...")
@@ -277,14 +326,17 @@ def run(log_path: str | None = None):
         events = parse_domain_events(text)
         cmds = parse_commands(text)
         pairs = parse_command_event_pairs(text)
-        print(f"  domain events: {len(events)}, commands: {len(cmds)}, pairs: {len(pairs)}")
+        policies = parse_policies(text)
+        print(f"  domain events: {len(events)}, commands: {len(cmds)}, pairs: {len(pairs)}, policies: {len(policies)}")
         all_events.extend(events)
         all_commands.extend(cmds)
         all_pairs.extend(pairs)
+        all_policies.extend(policies)
 
     print(f"\nTotal domain events : {len(all_events)}")
     print(f"Total commands      : {len(all_commands)}")
     print(f"Total pairs         : {len(all_pairs)}")
+    print(f"Total policies      : {len(all_policies)}")
 
     if all_events:
         print(f"\nExample domain event:")
@@ -307,6 +359,12 @@ def run(log_path: str | None = None):
         print(f"  commands_events_pairs : {ex['commands_events_pairs']}")
         print(f"  embed_text            : {ex['document']}")
 
+    if all_policies:
+        print(f"\nExample policy:")
+        ex = all_policies[0]
+        print(f"  policy     : {ex['policy']}")
+        print(f"  embed_text : {ex['document']}")
+
     model = SentenceTransformer(MODEL_NAME)
     print(f"\nEmbedding with {MODEL_NAME}...")
 
@@ -319,11 +377,15 @@ def run(log_path: str | None = None):
     written_pairs = embed_and_store(
         all_pairs, "document", COLLECTION_PAIRS, model, "log_pair"
     )
+    written_policies = embed_and_store(
+        all_policies, "document", COLLECTION_POLICY, model, "log_policy"
+    )
 
     print(f"\n=== Done ===")
     print(f"  {written_events} vectors -> '{COLLECTION_DOMAIN_EVENTS}'")
     print(f"  {written_cmds} vectors -> '{COLLECTION_COMMANDS}'")
     print(f"  {written_pairs} vectors -> '{COLLECTION_PAIRS}'")
+    print(f"  {written_policies} vectors -> '{COLLECTION_POLICY}'")
 
 
 if __name__ == "__main__":

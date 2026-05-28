@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from embedding.seed_log import parse_domain_events, parse_commands, parse_command_event_pairs
+from embedding.seed_log import parse_domain_events, parse_commands, parse_command_event_pairs, parse_policies
 
 # Minimal realistic log snippets copied from the actual log format
 _DOMAIN_EVENTS_FIXTURE = """
@@ -199,3 +199,62 @@ class TestParseCommandEventPairs:
             "[Strategic Design - Step3]: Pair Commands with Events.", ""
         )
         assert parse_command_event_pairs(text) == []
+
+
+_POLICY_FIXTURE = """
+[2026-05-12 00:05:49]-----------------------------------------------------------
+[2026-05-12 00:05:49] [Strategic Design - Step5]: Create Policies Between Events And Commands
+[2026-05-12 00:05:49]-----------------------------------------------------------
+[2026-05-12 00:05:51][DEBUG] (Policy)Event-Command found: "user profile created"->"register user"
+                      sentence: The system checks whether the username is taken and creates a user profile for the user . User is registered in the system and has the username and password to access the system .
+                      Causal prediction confidence: 0.558683454990387
+[2026-05-12 00:06:35][DEBUG] (Policy)Event-Command found: "meeting initiated"->"get meeting list data"
+                      sentence: The user is initiating a meeting or managing a meeting. The system sends a request to the backend to get meeting list data .
+                      Causal prediction confidence: 0.9081053733825684
+[2026-05-12 00:07:10][DEBUG] (Policy)Event-Command found: "administrator logged in"->"delete user level"
+                      sentence: The administrator is logged in to the system. The user can add , edit or delete the user levels .
+                      Causal prediction confidence: 0.881516695022583
+[2026-05-12 00:07:10]-----------------------------------------------------------
+[2026-05-12 00:07:10] [Strategic Design - Step6]: Group Event-Command Pairs Into Aggregates
+[2026-05-12 00:07:10]-----------------------------------------------------------
+"""
+
+
+class TestParsePolicies:
+    def test_count(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        assert len(records) == 3
+
+    def test_fields_present(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        for r in records:
+            assert "policy" in r
+            assert "document" in r
+
+    def test_no_extra_fields(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        for r in records:
+            assert set(r.keys()) == {"policy", "document"}
+
+    def test_policy_value_format(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        admin = next(r for r in records if "administrator" in r["policy"])
+        assert admin["policy"] == '"administrator logged in"->"delete user level"'
+
+    def test_document_is_sentence(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        register = next(r for r in records if "register user" in r["policy"])
+        assert "user profile" in register["document"]
+
+    def test_no_empty_document(self):
+        records = parse_policies(_POLICY_FIXTURE)
+        assert all(r["document"].strip() for r in records)
+
+    def test_empty_log_returns_empty(self):
+        assert parse_policies("") == []
+
+    def test_missing_step5_marker_returns_empty(self):
+        text = _POLICY_FIXTURE.replace(
+            "[Strategic Design - Step5]: Create Policies Between Events And Commands", ""
+        )
+        assert parse_policies(text) == []
