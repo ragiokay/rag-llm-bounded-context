@@ -1,0 +1,36 @@
+[
+  {
+    "collection": "spring2026SE_g1_rag_mtop_commands",
+    "match_text": "Remind me to start cooking dinner in 10 minutes",
+    "payload": {
+      "event": "Reminder Created",
+      "command": "Create Reminder"
+    }
+  },
+  {
+    "collection": "spring2026SE_g1_rag_mtop_commands",
+    "match_text": "Set an alarm for 7am tomorrow",
+    "payload": {
+      "event": "Alarm Set",
+      "command": "Create Alarm"
+    }
+  },
+  {
+    "collection": "spring2026SE_g1_rag_bpc_education",
+    "match_text": "Problem statement occurs before Finalizing research. Finalizing research occurs before Writing down findings. Does Writing down findings occur before Problem statement?",
+    "payload": {
+      "business_logic": "research workflow sequencing",
+      "cause": "Problem statement",
+      "effect": "Writing down findings"
+    }
+  },
+  {
+    "collection": "spring2026SE_g1_rag_bpc_finance",
+    "match_text": "Risk Assessment triggers the execution of Loan request Approval which further triggers the execution of Loan funding process. If Loan request Approval doesn't execute, will Loan funding process execute?",
+    "payload": {
+      "business_logic": "loan approval dependency",
+      "cause": "Risk Assessment",
+      "effect": "Loan funding process"
+    }
+  }
+]
