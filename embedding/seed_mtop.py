@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct
 from sentence_transformers import SentenceTransformer
-from causal_transform import CausalRelationRecord
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_PREFIX = os.getenv("COLLECTION_PREFIX", "")
@@ -133,9 +132,9 @@ def load_mtop_tsv(path: str) -> list[dict]:
     return rows
 
 
-def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
+def parse_record(row: dict) -> "dict | None":
     """
-    Parse one MTOP row into a CausalRelationRecord.
+    Parse one MTOP row into a payload dict.
     Returns None for query-type intents and rows missing required fields.
 
     Accepts raw TSV rows (keys: intent, text, domain) and
@@ -151,27 +150,25 @@ def parse_record(row: dict, idx: int) -> "CausalRelationRecord | None":
         return None
 
     command_name = intent_to_command_name(intent)
-    aggregate = intent_to_aggregate(intent).lower()
-    trigger = extract_trigger_span(text)
+    aggregate    = intent_to_aggregate(intent).lower()
+    trigger      = extract_trigger_span(text)
     clean_intent = intent.removeprefix("IN:").lower()
 
-    try:
-        return CausalRelationRecord(
-            id=f"mtop_{idx}",
-            domain_event=text,
-            command=command_name,
-            policy=f"command: {clean_intent}",
-            aggregate=aggregate,
-            bounded_context=domain,
-            source_phrase=text,
-            embed_text=text,
-            trigger_span=trigger or None,
-        )
-    except Exception:
-        return None
+    record: dict = {
+        "domain_event":    text,
+        "command":         command_name,
+        "policy":          f"command: {clean_intent}",
+        "aggregate":       aggregate,
+        "bounded_context": domain,
+        "source_phrase":   text,
+        "document":        text,
+    }
+    if trigger:
+        record["trigger_span"] = trigger
+    return record
 
 
-def embed_and_store(records: list[CausalRelationRecord],
+def embed_and_store(records: list[dict],
                     collection: str, model: SentenceTransformer,
                     batch_size: int = 256) -> int:
     """Embeds records in batches and upserts into Qdrant. Returns count written."""
@@ -190,13 +187,13 @@ def embed_and_store(records: list[CausalRelationRecord],
     written = 0
     for i in range(0, len(records), batch_size):
         batch = records[i: i + batch_size]
-        texts = [r.embed_text for r in batch]
+        texts = [r["document"] for r in batch]
         embeddings = model.encode(texts, show_progress_bar=False).tolist()
         points = [
             PointStruct(
-                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r.id)),
+                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, r["document"][:120])),
                 vector=embeddings[j],
-                payload={**r.to_chroma_metadata(), "document": r.embed_text},
+                payload=r,
             )
             for j, r in enumerate(batch)
         ]
@@ -255,10 +252,10 @@ def run(limit: int | None = None, lang: str = "en"):
     print(f"Loaded {len(rows)} rows total")
 
     print("Parsing command-type intents (filtering out query/review)...")
-    all_records: list[CausalRelationRecord] = []
+    all_records: list[dict] = []
     skipped_rows: list[dict] = []
-    for idx, row in enumerate(rows):
-        record = parse_record(row, idx)
+    for row in rows:
+        record = parse_record(row)
         if record is None:
             skipped_rows.append(row)
         else:
@@ -273,8 +270,8 @@ def run(limit: int | None = None, lang: str = "en"):
 
     with open(kept_path, "w", encoding="utf-8") as f:
         for r in all_records:
-            intent = r.policy.replace("command: ", "").upper()
-            f.write(f"{intent}\t{r.source_phrase}\n")
+            intent = r["policy"].replace("command: ", "").upper()
+            f.write(f"{intent}\t{r['source_phrase']}\n")
 
     with open(skipped_path, "w", encoding="utf-8") as f:
         for row in skipped_rows:
@@ -292,11 +289,11 @@ def run(limit: int | None = None, lang: str = "en"):
     # Show example
     ex = all_records[0]
     print("\n--- Example record ---")
-    print(f"  Text         : {ex.embed_text}")
-    print(f"  Command      : {ex.command}")
-    print(f"  Trigger span : {ex.trigger_span}")
-    print(f"  Policy       : {ex.policy}")
-    print(f"  Aggregate    : {ex.aggregate}")
+    print(f"  Text         : {ex['document']}")
+    print(f"  Command      : {ex['command']}")
+    print(f"  Trigger span : {ex.get('trigger_span')}")
+    print(f"  Policy       : {ex['policy']}")
+    print(f"  Aggregate    : {ex['aggregate']}")
     print("----------------------\n")
 
     print(f"Embedding with {MODEL_NAME}...")

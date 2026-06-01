@@ -14,7 +14,6 @@ import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance
 from unittest.mock import MagicMock
-from causal_transform import CausalRelationRecord
 from seed_mtop import (
     classify_mtop_intent,
     intent_to_command_name,
@@ -164,68 +163,56 @@ class TestExtractTriggerSpan:
 
 class TestParseRecordHappyPath:
     def test_returns_record_for_command(self):
-        row = make_row()
-        assert parse_record(row, 0) is not None
+        assert parse_record(make_row()) is not None
 
-    def test_returns_causal_relation_record(self):
-        row = make_row()
-        assert isinstance(parse_record(row, 0), CausalRelationRecord)
+    def test_returns_dict(self):
+        assert isinstance(parse_record(make_row()), dict)
 
     def test_command_field_is_normalized(self):
-        row = make_row()
-        record = parse_record(row, 0)
-        assert record.command == "Create Reminder"
+        record = parse_record(make_row())
+        assert record["command"] == "Create Reminder"
 
     def test_policy_contains_intent(self):
-        row = make_row()
-        record = parse_record(row, 0)
-        assert "create_reminder" in record.policy
+        record = parse_record(make_row())
+        assert "create_reminder" in record["policy"]
 
     def test_aggregate_is_object_part(self):
-        row = make_row()
-        record = parse_record(row, 0)
-        assert record.aggregate == "reminder"
+        record = parse_record(make_row())
+        assert record["aggregate"] == "reminder"
 
     def test_bounded_context_is_mtop(self):
-        row = make_row()
-        record = parse_record(row, 0)
-        assert record.bounded_context == "MTOP"
+        record = parse_record(make_row())
+        assert record["bounded_context"] == "MTOP"
 
-    def test_embed_text_is_utterance(self):
+    def test_document_is_utterance(self):
         row = make_row()
-        record = parse_record(row, 0)
-        assert record.embed_text == row["text"]
+        record = parse_record(row)
+        assert record["document"] == row["text"]
 
-    def test_trigger_span_not_none(self):
-        row = make_row()
-        record = parse_record(row, 0)
-        assert record.trigger_span is not None
-
-    def test_id_contains_index(self):
-        row = make_row()
-        record = parse_record(row, 42)
-        assert "42" in record.id
+    def test_trigger_span_present(self):
+        record = parse_record(make_row())
+        assert record.get("trigger_span") is not None
 
     def test_in_prefix_in_label_text_handled(self):
         row = make_row(label_text="IN:CREATE_REMINDER")
-        record = parse_record(row, 0)
+        record = parse_record(row)
         assert record is not None
-        assert record.command == "Create Reminder"
+        assert record["command"] == "Create Reminder"
 
     def test_send_message(self):
         row = make_row(
             text="text Matthew and Helen that are you free",
             label_text="SEND_MESSAGE",
         )
-        record = parse_record(row, 1)
+        record = parse_record(row)
         assert record is not None
-        assert record.command == "Send Message"
+        assert record["command"] == "Send Message"
 
     def test_delete_alarm(self):
         row = make_row(text="Delete my 7am alarm", label_text="DELETE_ALARM")
-        record = parse_record(row, 2)
+        record = parse_record(row)
         assert record is not None
-        assert record.aggregate == "alarm"
+        assert record["aggregate"] == "alarm"
 
 
 # ---------------------------------------------------------------------------
@@ -235,36 +222,34 @@ class TestParseRecordHappyPath:
 class TestParseRecordFiltering:
     def test_query_intent_returns_none(self):
         row = make_row(text="What's the weather in New Zealand?", label_text="GET_WEATHER")
-        assert parse_record(row, 0) is None
+        assert parse_record(row) is None
 
     def test_question_intent_returns_none(self):
         row = make_row(text="Any news today?", label_text="QUESTION_NEWS")
-        assert parse_record(row, 0) is None
+        assert parse_record(row) is None
 
     def test_is_true_intent_returns_none(self):
         row = make_row(text="Is this recipe vegetarian?", label_text="IS_TRUE_RECIPES")
-        assert parse_record(row, 0) is None
+        assert parse_record(row) is None
 
     def test_empty_text_returns_none(self):
         row = {"text": "", "label_text": "CREATE_REMINDER"}
-        assert parse_record(row, 0) is None
+        assert parse_record(row) is None
 
     def test_empty_intent_returns_none(self):
         row = {"text": "Remind me something", "label_text": ""}
-        assert parse_record(row, 0) is None
+        assert parse_record(row) is None
 
     def test_missing_fields_returns_none(self):
-        assert parse_record({}, 0) is None
+        assert parse_record({}) is None
 
     def test_utterance_field_alias_accepted(self):
         row = {"utterance": "Set a timer for 5 minutes", "label_text": "CREATE_TIMER"}
-        record = parse_record(row, 0)
-        assert record is not None
+        assert parse_record(row) is not None
 
     def test_intent_field_alias_accepted(self):
         row = {"text": "Set a timer for 5 minutes", "intent": "CREATE_TIMER"}
-        record = parse_record(row, 0)
-        assert record is not None
+        assert parse_record(row) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +262,7 @@ def _make_records():
         make_row("Send a message to Alice saying I am late", "SEND_MESSAGE"),
         make_row("Delete my morning alarm", "DELETE_ALARM"),
     ]
-    return [r for r in (parse_record(row, i) for i, row in enumerate(rows)) if r]
+    return [r for r in (parse_record(row) for row in rows) if r]
 
 
 class TestEmbedAndStore:
@@ -292,7 +277,6 @@ class TestEmbedAndStore:
         self._client = self.client
 
     def _run_embed_and_store(self, records=None, col=COLLECTION_NAME):
-        """Run embed_and_store but with our in-memory client."""
         import seed_mtop
         orig = seed_mtop.QdrantClient
 
@@ -317,23 +301,24 @@ class TestEmbedAndStore:
     def test_empty_records_writes_zero(self):
         assert self._run_embed_and_store(records=[]) == 0
 
-    def test_retrieve_by_id(self):
+    def test_retrieve_by_document(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
         assert len(results) == 1
-        assert results[0].id == _uuid(record.id)
 
     def test_metadata_has_command(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
         meta = results[0].payload
@@ -343,9 +328,10 @@ class TestEmbedAndStore:
     def test_metadata_has_policy(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
         meta = results[0].payload
@@ -355,45 +341,49 @@ class TestEmbedAndStore:
     def test_metadata_has_trigger_span(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
-        meta = results[0].payload
-        assert "trigger_span" in meta
+        assert "trigger_span" in results[0].payload
 
     def test_metadata_has_bounded_context(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
-        meta = results[0].payload
-        assert meta["bounded_context"] == "MTOP"
+        assert results[0].payload["bounded_context"] == "MTOP"
 
     def test_vector_dimension(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_vectors=True,
         )
         assert len(results[0].vector) == EMBED_DIM
 
-    def test_document_matches_embed_text(self):
+    def test_document_matches_text(self):
         self._run_embed_and_store()
         record = self.records[0]
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, record["document"][:120]))
         results = self.client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[_uuid(record.id)],
+            ids=[point_id],
             with_payload=True,
         )
-        assert results[0].payload["document"] == record.embed_text
+        assert results[0].payload["document"] == record["document"]
 
     def test_ids_are_unique(self):
-        ids = [r.id for r in self.records]
+        self._run_embed_and_store()
+        points, _ = self.client.scroll(collection_name=COLLECTION_NAME, limit=100)
+        ids = [str(p.id) for p in points]
         assert len(ids) == len(set(ids))
